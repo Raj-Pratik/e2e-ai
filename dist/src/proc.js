@@ -52,6 +52,7 @@ export function runProcess(command, args, options) {
         let killTimer;
         let child;
         let interactiveFd;
+        let interactiveOutputFd;
         const onAbort = () => {
             aborted = true;
             terminate();
@@ -68,6 +69,14 @@ export function runProcess(command, args, options) {
             if (interactiveFd !== undefined) {
                 try {
                     fs.closeSync(interactiveFd);
+                }
+                catch {
+                    // The child may already have closed the descriptor.
+                }
+            }
+            if (interactiveOutputFd !== undefined) {
+                try {
+                    fs.closeSync(interactiveOutputFd);
                 }
                 catch {
                     // The child may already have closed the descriptor.
@@ -107,6 +116,7 @@ export function runProcess(command, args, options) {
         try {
             if (options.interactive) {
                 interactiveFd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
+                interactiveOutputFd = fs.openSync(process.platform === 'win32' ? 'CONOUT$' : '/dev/tty', 'w');
             }
             child = spawn(command, [...args], {
                 cwd: options.cwd,
@@ -114,7 +124,11 @@ export function runProcess(command, args, options) {
                 shell: false,
                 windowsHide: true,
                 detached: useGroup,
-                stdio: [options.interactive ? interactiveFd : options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+                stdio: [
+                    options.interactive ? interactiveFd : options.input === undefined ? 'ignore' : 'pipe',
+                    options.interactive ? interactiveOutputFd : 'pipe',
+                    options.interactive ? interactiveOutputFd : 'pipe',
+                ],
             });
         }
         catch (error) {
@@ -143,10 +157,6 @@ export function runProcess(command, args, options) {
             stderr.push(chunk);
             options.onOutput?.(chunk, 'stderr');
         });
-        if (options.interactive) {
-            child.stdout?.on('data', (chunk) => process.stdout.write(chunk));
-            child.stderr?.on('data', (chunk) => process.stderr.write(chunk));
-        }
         child.on('error', (error) => finish(null, null, error));
         child.on('close', (code, signal) => finish(code, signal));
         if (options.input !== undefined && child.stdin) {

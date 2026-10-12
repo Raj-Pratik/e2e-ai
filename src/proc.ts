@@ -80,6 +80,7 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     let killTimer: NodeJS.Timeout | undefined;
     let child: ChildProcess | undefined;
     let interactiveFd: number | undefined;
+    let interactiveOutputFd: number | undefined;
 
     const onAbort = (): void => {
       aborted = true;
@@ -95,6 +96,13 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       if (interactiveFd !== undefined) {
         try {
           fs.closeSync(interactiveFd);
+        } catch {
+          // The child may already have closed the descriptor.
+        }
+      }
+      if (interactiveOutputFd !== undefined) {
+        try {
+          fs.closeSync(interactiveOutputFd);
         } catch {
           // The child may already have closed the descriptor.
         }
@@ -131,6 +139,7 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     try {
       if (options.interactive) {
         interactiveFd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
+        interactiveOutputFd = fs.openSync(process.platform === 'win32' ? 'CONOUT$' : '/dev/tty', 'w');
       }
       child = spawn(command, [...args], {
         cwd: options.cwd,
@@ -138,7 +147,11 @@ export function runProcess(command: string, args: readonly string[], options: Ru
         shell: false,
         windowsHide: true,
         detached: useGroup,
-        stdio: [options.interactive ? interactiveFd! : options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        stdio: [
+          options.interactive ? interactiveFd! : options.input === undefined ? 'ignore' : 'pipe',
+          options.interactive ? interactiveOutputFd! : 'pipe',
+          options.interactive ? interactiveOutputFd! : 'pipe',
+        ],
       });
     } catch (error) {
       finish(null, null, error instanceof Error ? error : new Error(String(error)));
@@ -166,10 +179,6 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       stderr.push(chunk);
       options.onOutput?.(chunk, 'stderr');
     });
-    if (options.interactive) {
-      child.stdout?.on('data', (chunk: string) => process.stdout.write(chunk));
-      child.stderr?.on('data', (chunk: string) => process.stderr.write(chunk));
-    }
     child.on('error', (error) => finish(null, null, error));
     child.on('close', (code, signal) => finish(code, signal));
 
