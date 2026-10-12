@@ -57,7 +57,7 @@ No runtime dependencies; dev dependencies are `typescript` and `@types/node` onl
 Install the CLI from GitHub:
 
 ```sh
-npm install --global github:Raj-Pratik/e2e-ai
+npm install --global https://github.com/Raj-Pratik/e2e-ai/archive/refs/heads/main.tar.gz
 ```
 
 The CLI requires Node.js 20.10 or newer. Authenticate at least one supported
