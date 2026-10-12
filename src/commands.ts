@@ -47,6 +47,8 @@ Commands:
   generate [--base <rev>] [--head <rev>] [--provider <id>] [--foreground] [--force]
                                       Generate tests for base..head (default: upstream..HEAD)
   push [git push options and refs]           Generate, validate, commit, then safely push
+  publish-after-push --remote <name> --branch <name> --expected <sha>
+                                      Internal guarded follow-up push for generated tests
   status [<job-id>] [--json] [--limit <n>]
                                       Show recent or specific generation jobs
   logs [<job-id>] [--tail <n>]        Print a job log (default: latest job)
@@ -286,6 +288,41 @@ async function cmdPush(args: string[], io: CliIO): Promise<number> {
   return 0;
 }
 
+async function cmdPublishAfterPush(args: string[], io: CliIO): Promise<number> {
+  const { values } = parse(args, {
+    remote: { type: 'string' },
+    branch: { type: 'string' },
+    expected: { type: 'string' },
+  });
+  const remote = values.remote;
+  const branch = values.branch;
+  const expected = values.expected;
+  if (typeof remote !== 'string' || typeof branch !== 'string' || typeof expected !== 'string') {
+    throw new UsageError('publish-after-push requires --remote, --branch and --expected.');
+  }
+  const root = await findRepoRoot(io.cwd);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const remoteSha = (await tryGit(root, ['ls-remote', remote, `refs/heads/${branch}`]))?.trim().split(/\s+/)[0];
+    if (remoteSha && (await tryGit(root, ['merge-base', '--is-ancestor', expected, remoteSha])) !== null) {
+      const result = await runProcess('git', ['push', remote, `HEAD:refs/heads/${branch}`], {
+        cwd: root,
+        env: { ...io.env, AI_E2E_SKIP: '1' },
+        timeoutMs: 10 * 60 * 1000,
+        maxOutputBytes: 64 * 1024 * 1024,
+      });
+      if (result.exitCode === 0) {
+        io.out(`ai-e2e: generated tests pushed to ${remote}/${branch}.\n`);
+        return 0;
+      }
+      io.err(`ai-e2e: follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\n`);
+      return 1;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  io.err('ai-e2e: original push was not observed on the remote; generated tests were left committed locally.\n');
+  return 1;
+}
+
 async function cmdStatus(args: string[], io: CliIO): Promise<number> {
   const { values, positionals } = parse(args, { json: { type: 'boolean' }, limit: { type: 'string' } });
   const { store } = await context(io);
@@ -499,6 +536,7 @@ const COMMANDS: Record<string, (args: string[], io: CliIO) => Promise<number>> =
   init: cmdInit,
   generate: cmdGenerate,
   push: cmdPush,
+  'publish-after-push': cmdPublishAfterPush,
   status: cmdStatus,
   logs: cmdLogs,
   config: cmdConfig,

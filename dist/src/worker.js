@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { analyzeOutgoing } from './changes.js';
 import { loadConfig, stateDirPath } from './config.js';
 import { AiE2eError, errorMessage } from './errors.js';
@@ -122,6 +123,23 @@ function summarize(job, setup) {
     if (!setup.configPath)
         lines.push('Note: no Playwright config file was found.');
     return lines.join('\n');
+}
+function scheduleFollowUpPush(root, remote, refs) {
+    const ref = refs.find((candidate) => candidate.localRef.startsWith('refs/heads/') && candidate.remoteRef.startsWith('refs/heads/'));
+    const cli = process.argv[1];
+    if (!ref || !cli)
+        throw new AiE2eError('Could not schedule the follow-up push: branch ref or CLI path is unavailable.');
+    const child = spawn(process.execPath, [
+        cli,
+        'publish-after-push',
+        '--remote',
+        remote,
+        '--branch',
+        ref.remoteRef.slice('refs/heads/'.length),
+        '--expected',
+        ref.localSha,
+    ], { cwd: root, detached: true, stdio: 'ignore', env: { ...process.env, AI_E2E_SKIP: '1' } });
+    child.unref();
 }
 export async function runJob(options) {
     const { repoRoot: root, jobId, signal } = options;
@@ -247,7 +265,10 @@ export async function runJob(options) {
             ]);
             log('Committed generated Playwright tests after a passing run.');
             if (job.source === 'pre-push') {
-                throw new AiE2eError('Generated Playwright tests were committed locally after passing. Run git push again to publish both the feature and generated tests.');
+                if (!job.remote)
+                    throw new AiE2eError('Generated tests were committed, but the pre-push remote is unavailable for publishing.');
+                scheduleFollowUpPush(root, job.remote, refs);
+                log('Original push will finish first; a guarded follow-up push was scheduled for the generated tests.');
             }
         }
         const summary = summarize({ generatedFiles, proposedPatches: restored.patches, ...(testRun ? { testRun } : {}) }, setup);

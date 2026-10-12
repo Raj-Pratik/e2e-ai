@@ -149,12 +149,12 @@ To generate tests manually for the current branch against a base branch:
 ai-e2e generate --base origin/main
 ```
 
-To use the safe one-command push workflow:
+Use the normal Git push workflow:
 
 ```sh
 git add .
 git commit -m "Describe the product change"
-ai-e2e push
+git push -u origin your-branch
 ```
 
 The selected provider then asks about the
@@ -164,13 +164,12 @@ does not pass. If the change is documentation-only, package metadata, Docker,
 Kubernetes, CI, or another non-product change, the planner can explain why E2E
 coverage is unnecessary and ask for confirmation to skip it.
 
-Direct `git push` remains supported for hook-only gating, but if generated
-tests are committed during that hook it stops and tells you to rerun through
-`ai-e2e push`; this is required because Git cannot safely perform a nested push
-from inside a pre-push hook.
+When generated tests pass, ai-e2e commits them during the hook, allows the
+original push to finish, verifies that the feature commit reached the remote,
+and performs a guarded follow-up push automatically. No special push command
+is required.
 
-For one-command publishing that safely includes the generated-test commit, use
-the ai-e2e wrapper instead of calling `git push` directly:
+An optional foreground wrapper is also available:
 
 ```sh
 ai-e2e push

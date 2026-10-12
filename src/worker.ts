@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { analyzeOutgoing, type ChangeSet } from './changes.js';
 import { loadConfig, stateDirPath, type Config } from './config.js';
 import { AiE2eError, errorMessage } from './errors.js';
@@ -145,6 +146,27 @@ function summarize(job: Pick<JobRecord, 'generatedFiles' | 'proposedPatches' | '
   return lines.join('\n');
 }
 
+function scheduleFollowUpPush(root: string, remote: string, refs: ReturnType<typeof parsePrePushInput>): void {
+  const ref = refs.find((candidate) => candidate.localRef.startsWith('refs/heads/') && candidate.remoteRef.startsWith('refs/heads/'));
+  const cli = process.argv[1];
+  if (!ref || !cli) throw new AiE2eError('Could not schedule the follow-up push: branch ref or CLI path is unavailable.');
+  const child = spawn(
+    process.execPath,
+    [
+      cli,
+      'publish-after-push',
+      '--remote',
+      remote,
+      '--branch',
+      ref.remoteRef.slice('refs/heads/'.length),
+      '--expected',
+      ref.localSha,
+    ],
+    { cwd: root, detached: true, stdio: 'ignore', env: { ...process.env, AI_E2E_SKIP: '1' } },
+  );
+  child.unref();
+}
+
 export async function runJob(options: WorkerOptions): Promise<JobRecord> {
   const { repoRoot: root, jobId, signal } = options;
   const log = options.log ?? createLogger();
@@ -276,7 +298,9 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
       ]);
       log('Committed generated Playwright tests after a passing run.');
       if (job.source === 'pre-push') {
-        throw new AiE2eError('Generated Playwright tests were committed locally after passing. Run git push again to publish both the feature and generated tests.');
+        if (!job.remote) throw new AiE2eError('Generated tests were committed, but the pre-push remote is unavailable for publishing.');
+        scheduleFollowUpPush(root, job.remote, refs);
+        log('Original push will finish first; a guarded follow-up push was scheduled for the generated tests.');
       }
     }
 
