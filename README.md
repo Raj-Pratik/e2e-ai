@@ -1,13 +1,12 @@
 # ai-e2e
 
-Optional, local-first tool that offers to generate Playwright E2E tests for your outgoing changes when you `git push`.
+AI-assisted Playwright E2E test generation for outgoing Git changes.
 
 ```
 $ git push
 ai-e2e: 2 outgoing commit(s), 5 changed file(s).
 Would you like to generate E2E tests for these changes using AI? [y/N] y
-ai-e2e: started background job 20261012-151203-a1b2c3. Check progress with `ai-e2e status` and `ai-e2e logs`.
-...push continues immediately...
+ai-e2e: generated and validated tests for job 20261012-151203-a1b2c3. Push may continue.
 ```
 
 **An accepted generation is a push gate.** Declining or pressing Enter allows the push, but after accepting, ai-e2e
@@ -24,9 +23,9 @@ flowchart LR
   B -->|refs on stdin| C[ai-e2e hook pre-push]
   C -->|check explicit skip controls| D{prompt y/N<br/>via /dev/tty}
   D -->|no / Enter / no TTY / timeout| E[exit 0]
-  D -->|yes| F[analyze outgoing changes,<br/>create job + detached worker]
+  D -->|yes| F[analyze outgoing changes,<br/>interactive provider workflow]
   F --> E
-  F -.-> G[worker: analyze diffs, build task.md,<br/>run AI CLI, verify output,<br/>optional test run]
+  F -.-> G[plan, ask questions, generate,<br/>run Playwright, heal failures]
   G -.-> H[.ai-e2e/jobs/&lt;id&gt;/<br/>job.json · worker.log · task.md]
 ```
 
@@ -38,7 +37,7 @@ flowchart LR
 | `src/changes.ts` | Resolves commit ranges per ref (update, new branch, force push, deletion), changed files, bounded and redacted diffs |
 | `src/exclusions.ts`, `src/glob.ts`, `src/redact.ts` | Sensitive/generated file exclusion and secret redaction |
 | `src/prompt.ts` | y/N prompt on the controlling terminal (stdin carries the refs) |
-| `src/hook.ts` | Hook flow; every path resolves, errors become one-line messages |
+| `src/hook.ts` | Hook flow; accepted failures block the push |
 | `src/hookInstall.ts` | Inserts/removes a marked block in the existing hook, husky/hook-manager detection, `.gitignore` |
 | `src/jobs.ts` | Job records, atomic writes, fingerprint locks, stale/crashed worker detection, pruning |
 | `src/launcher.ts` | Detached worker spawn with log redirection; duplicate handling |
@@ -69,6 +68,93 @@ provider before generating tests:
 copilot login
 # or: claude auth login
 ```
+
+## Quick start from zero
+
+Run these steps from the repository where you want ai-e2e enabled:
+
+```sh
+# 1. Confirm prerequisites
+node --version        # must be 20.10 or newer
+git --version
+
+# 2. Install ai-e2e from GitHub
+npm install --global https://github.com/Raj-Pratik/e2e-ai/archive/refs/heads/main.tar.gz
+
+# 3. Confirm the installation
+ai-e2e --version
+ai-e2e providers
+
+# 4. Authenticate at least one provider
+copilot login
+# or:
+claude auth login
+
+# 5. Enter your application repository
+cd /path/to/your/repository
+
+# 6. Initialize ai-e2e
+# Select Copilot or Claude when prompted.
+ai-e2e init --force
+
+# 7. Install Playwright MCP and enable it
+ai-e2e playwright-init --yes
+
+# 8. Validate the setup
+ai-e2e config validate
+ai-e2e config get provider
+ai-e2e config get mcp.playwright.enabled
+```
+
+For this repository, the final setup commands are:
+
+```sh
+cd /path/to/voy-fleet-frontend
+ai-e2e init --force
+ai-e2e playwright-init --yes
+```
+
+`ai-e2e init` creates `.ai-e2e.json`, installs the pre-push integration and
+asks which provider to use. `ai-e2e playwright-init --yes` detects the existing
+Playwright setup, installs `@playwright/mcp`, and enables MCP. Commit the
+generated `.ai-e2e.json`, package manifest/lockfile changes, `.gitignore`
+entry, and hook changes after reviewing them.
+
+To change the provider later:
+
+```sh
+ai-e2e config set provider copilot
+ai-e2e config set provider claude
+```
+
+To remove the integration from a repository:
+
+```sh
+ai-e2e uninstall
+rm -f .ai-e2e.json
+rm -rf .ai-e2e
+```
+
+To generate tests manually for the current branch against a base branch:
+
+```sh
+ai-e2e generate --base origin/main
+```
+
+To use the normal push workflow:
+
+```sh
+git add .
+git commit -m "Describe the product change"
+git push
+```
+
+Answer `y` at the ai-e2e prompt. The selected provider then asks about the
+feature, creates a plan, waits for approval, generates tests, runs the new
+Playwright specs, heals failures, and blocks the push if the accepted workflow
+does not pass. If the change is documentation-only, package metadata, Docker,
+Kubernetes, CI, or another non-product change, the planner can explain why E2E
+coverage is unnecessary and ask for confirmation to skip it.
 
 ## Build from source
 
@@ -131,7 +217,7 @@ pre-push:
   commands:
     ai-e2e:
       use_stdin: true
-      run: node ai-e2e/dist/src/cli.js hook pre-push {1} {2} || true
+      run: node ai-e2e/dist/src/cli.js hook pre-push {1} {2}
 ```
 
 ## Commands
@@ -160,7 +246,7 @@ AI_E2E_SKIP=1 git push                  # bypass entirely
 AI_E2E_ASSUME=yes git push              # accept without a prompt (explicit opt-in)
 ```
 
-Exit codes: `0` success, `1` failure, `2` usage error. `hook` always exits `0`.
+Exit codes: `0` success, `1` failure or blocked accepted workflow, `2` usage error.
 
 ## Configuration (`.ai-e2e.json`)
 
