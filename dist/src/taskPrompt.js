@@ -56,17 +56,21 @@ export function buildTask(input) {
 You are generating end-to-end tests for code that a developer is pushing. Work only inside this repository.
 
 ## Rules (mandatory)
-- First act as a planner. Inspect the outgoing commits and classify the change as product behaviour, test-only,
-  documentation, Docker/Kubernetes, CI/CD, package metadata, generated output, or another non-product change.
-- If no meaningful product behaviour needs browser coverage, explain why E2E coverage is unnecessary and ask the user
-  to confirm skipping. Do not create tests until the user confirms the decision.
-- For product changes, explain the user-visible flow, risks, required scenarios, fixtures and shared helpers. Ask the
-  user focused questions about the feature's motivation, expected behaviour, roles/data, edge cases and environment
-  before finalising the plan. Do not invent answers.
-- Present the plan and wait for explicit user approval. Revise it when the user gives feedback.
-- When repository planner/generator/healer agent definitions exist (for example under \`.github/agents/\`), follow
-  those definitions and use the planner before the generator and the healer after any failed Playwright run.
-- Only after approval, use the Playwright MCP agent to explore the application and implement the plan.
+  - Stay focused on browser coverage. Do not ask open-ended motivation or "why" questions.
+  - First inspect the outgoing commits and classify the change. Documentation, Docker/Kubernetes, CI/CD, package
+    metadata, generated output and test-only changes normally need no E2E test; state that briefly and continue without
+    asking a question when the classification is unambiguous.
+  - For a product flow, use the installed Copilot skills from \`mattpocock/skills\` when available and use the
+    Playwright planner, generator and healer agent definitions created by \`npx playwright init-agents --loop=vscode\`.
+  - Ask questions only when an answer changes the test plan. Use compact multiple-choice questions (A/B/C, with an
+    "Other" option), covering only the critical user path, expected assertion, role/data fixture and environment.
+    If the flow is clear from the diff, source and existing tests, ask no questions and proceed.
+  - Present a concise test plan and request approval only when the plan is materially ambiguous or risky. For a simple
+    flow, proceed directly with the planner and generator agents.
+  - Use the planner agent to identify critical scenarios and assertions, the generator agent to create the tests, and
+    the healer agent after every failed Playwright run. Repeat generator/run/heal until the newly generated tests pass
+    or a concrete environment blocker is reported. Do not declare success merely because the coding CLI exited.
+  - Do not use Playwright MCP. Explore through the Playwright agents and repository source instead.
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
   If an existing test or helper must change, describe the proposed patch in your final answer instead of editing it.
@@ -94,19 +98,10 @@ Reply with: (1) the list of files you created, (2) what each test covers, (3) an
 - Existing test files: ${setup.testFiles.length}
 - Playwright-related package scripts: ${Object.keys(setup.scripts).length ? Object.entries(setup.scripts).map(([k, v]) => `\`${k}\` → \`${v}\``).join('; ') : 'none'}
 `);
-    if (input.mcp) {
-        const url = config.mcp.playwright.baseUrl;
-        budget.add(`## Playwright MCP
-A Playwright MCP server named \`${input.mcp.name}\` is available for exploring the UI.
-${url ? `Only navigate to ${url} (and paths under it). ` : 'No base URL is authorised: do not navigate anywhere unless the app is already reachable locally. '}
-Do not submit forms that create, modify or delete real data. If the app is unreachable, fall back to source analysis.
+    budget.add(`## Playwright agents
+Use the repository's Playwright planner, generator and healer agent definitions. They were installed by
+\`npx playwright init-agents --loop=vscode\`. Do not use Playwright MCP and do not install MCP packages.
 `);
-    }
-    else {
-        budget.add(`## Playwright MCP
-Not available${input.mcpNote ? ` (${input.mcpNote})` : ''}. Infer UI structure from source code and existing tests.
-`);
-    }
     const commitLines = changeSet.ranges.flatMap((r) => [
         `- \`${r.localRef}\` → \`${r.remoteRef}\` (${r.commitCount} commit(s)${r.forced ? ', force push' : ''})`,
         ...r.commits.map((c) => `  - ${c.sha.slice(0, 10)} ${c.subject}`),

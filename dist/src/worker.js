@@ -7,7 +7,7 @@ import { git, listFiles, statusSnapshot } from './git.js';
 import { JobStore } from './jobs.js';
 import { createLogger } from './log.js';
 import { detectPlaywright, isWithin } from './playwright.js';
-import { hasInteractiveTerminal, resolveCommand, runProcess } from './proc.js';
+import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, secretEnvNames } from './providers/index.js';
 import { redact } from './redact.js';
 import { parsePrePushInput } from './refs.js';
@@ -46,16 +46,6 @@ function lineWriter(log, prefix) {
             pending = '';
         },
     };
-}
-function resolveMcp(config, providerSupportsMcp, root) {
-    const settings = config.mcp.playwright;
-    if (!settings.enabled)
-        return { spec: null, note: 'disabled in configuration' };
-    if (!providerSupportsMcp)
-        return { spec: null, note: 'the selected provider does not support MCP' };
-    if (!resolveCommand(settings.command, root))
-        return { spec: null, note: `MCP command "${settings.command}" was not found` };
-    return { spec: { name: 'playwright', command: settings.command, args: settings.args }, note: null };
 }
 async function restoreExistingTests(root, jobDir, before, allowModify, log) {
     const patches = [];
@@ -149,7 +139,7 @@ export async function runJob(options) {
         const setup = await detectPlaywright(root, config);
         if (!setup.found) {
             throw new SkipJob('No Playwright setup detected (no playwright.config.* and no @playwright/test dependency). ' +
-                'Initialise Playwright explicitly, e.g. `npm init playwright@latest`, then re-run `ai-e2e generate`.');
+                'Run `ai-e2e playwright-init --yes` so the coding CLI can initialise Playwright and its agents, then re-run `ai-e2e generate`.');
         }
         log(`Playwright: config=${setup.configPath ?? 'none'}, testDir=${setup.testDir}, outputDir=${setup.outputDir}, ${setup.testFiles.length} existing test(s).`);
         const refs = parsePrePushInput(fs.readFileSync(path.join(jobDir, REFS_FILE), 'utf8'));
@@ -168,10 +158,9 @@ export async function runJob(options) {
         if (!availability.available)
             throw new AiE2eError(`${provider.displayName} is unavailable: ${availability.reason}`);
         log(`Provider ${provider.displayName}: ${availability.resolvedPath} (${availability.version ?? 'unknown version'}).`);
-        const mcp = resolveMcp(config, provider.supportsMcp, root);
-        log(mcp.spec ? `Playwright MCP enabled via "${mcp.spec.command}".` : `Playwright MCP not used: ${mcp.note}.`);
+        log('Playwright MCP is not used; Playwright agent definitions are managed by the coding CLI setup.');
         const taskFile = path.join(jobDir, TASK_FILE);
-        fs.writeFileSync(taskFile, buildTask({ repoRoot: root, changeSet, setup, config, mcp: mcp.spec, mcpNote: mcp.note }));
+        fs.writeFileSync(taskFile, buildTask({ repoRoot: root, changeSet, setup, config, mcp: null, mcpNote: 'managed by Playwright agents instead' }));
         const taskRel = path.relative(root, taskFile).split(path.sep).join('/');
         const instruction = `Read the task specification in \`${taskRel}\` and complete it exactly. Follow every rule in that file.`;
         const scanDirs = [...new Set([setup.testDir, setup.outputDir])];
@@ -183,7 +172,7 @@ export async function runJob(options) {
             repoRoot: root,
             instruction,
             settings,
-            mcp: mcp.spec,
+            mcp: null,
             secretEnvNames: secretEnvNames(process.env),
             interactive,
         });

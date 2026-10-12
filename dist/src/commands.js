@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyzeOutgoing } from './changes.js';
+import { buildPlaywrightSetupTask } from './agentSetupPrompt.js';
 import { CONFIG_FILE, defaultConfig, getConfigValue, loadConfig, parseConfigValue, setConfigValue, starterConfig, stateDirPath, writeConfig, } from './config.js';
 import { AiE2eError, errorMessage } from './errors.js';
 import { findRepoRoot, tryGit } from './git.js';
@@ -12,7 +13,7 @@ import { CLI_PATH, startJob } from './launcher.js';
 import { createLogger } from './log.js';
 import { detectPlaywright } from './playwright.js';
 import { askChoice, openTerminal } from './prompt.js';
-import { resolveCommand, runProcess } from './proc.js';
+import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
 import { runJob } from './worker.js';
 export class UsageError extends AiE2eError {
@@ -31,7 +32,7 @@ Commands:
   config [show|get <key>|set <key> <value>|validate|path]
                                       Display or update configuration
   providers [--json]                  List AI providers and whether they are available
-  playwright-init [--yes]             Explain (or, with --yes, run) Playwright + MCP initialisation
+  playwright-init [--yes]             Explain (or, with --yes, let the coding CLI set up Playwright agents)
   uninstall                           Remove the ai-e2e block from the pre-push hook
   help                                Show this help
 
@@ -359,40 +360,46 @@ async function cmdPlaywrightInit(args, io) {
     if (setup.found) {
         io.out(`Playwright is already set up (${setup.configPath ?? setup.dependency}).\n`);
         if (!values.yes) {
-            io.out('Re-run with --yes to install and enable Playwright MCP.\n');
+            io.out('Re-run with --yes to let the selected coding CLI verify Playwright and install its planner, generator and healer agents.\n');
             return 0;
         }
     }
     else {
-        const command = ['npm', 'init', 'playwright@latest'];
         if (!values.yes) {
-            io.out('No Playwright setup found. ai-e2e never installs Playwright implicitly.\n' +
-                `To initialise it, run \`${command.join(' ')}\` yourself, or re-run \`ai-e2e playwright-init --yes\` to run it now.\n` +
-                'This modifies package.json, adds dependencies and creates a config file.\n');
+            io.out('No Playwright setup found. Re-run `ai-e2e playwright-init --yes` and the selected coding CLI will inspect the repository, install the appropriate package, create the config and install the Playwright agents.\n');
             return 0;
         }
-        const npm = resolveCommand('npm', root);
-        if (!npm)
-            throw new AiE2eError('npm was not found on PATH.');
-        io.out(`Running: ${command.join(' ')}\n`);
-        const result = await runProcess(npm, command.slice(1), { cwd: root, interactive: true, onOutput: (chunk) => io.out(chunk) });
-        if (result.exitCode !== 0)
-            return 1;
     }
-    const npm = resolveCommand('npm', root);
-    if (!npm)
-        throw new AiE2eError('npm was not found on PATH.');
-    io.out('Installing Playwright MCP: npm install --save-dev @playwright/mcp\n');
-    const mcpResult = await runProcess(npm, ['install', '--save-dev', '@playwright/mcp'], {
+    if (!hasInteractiveTerminal())
+        throw new AiE2eError('Playwright setup requires an interactive terminal for the selected coding CLI.');
+    const provider = getProvider(config.provider);
+    const settings = {
+        ...(config.providers[provider.id] ?? config.providers.copilot),
+        allowedShellCommands: ['copilot', 'git', 'node', 'npm', 'npx', 'pnpm', 'yarn'],
+    };
+    const availability = await detectProvider(provider, settings, root);
+    if (!availability.available)
+        throw new AiE2eError(`${provider.displayName} is unavailable: ${availability.reason}`);
+    const invocation = provider.buildInvocation({
+        repoRoot: root,
+        instruction: buildPlaywrightSetupTask(provider.id),
+        settings,
+        mcp: null,
+        secretEnvNames: [],
+        interactive: true,
+    });
+    io.out(`Starting ${provider.displayName} to set up Playwright and its agents.\n`);
+    const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
         cwd: root,
         interactive: true,
         onOutput: (chunk) => io.out(chunk),
     });
-    if (mcpResult.exitCode !== 0)
+    if (result.exitCode !== 0)
         return 1;
-    const next = setConfigValue(loaded.raw, 'mcp.playwright.enabled', true);
-    writeConfig(loaded.path, next);
-    io.out('Playwright MCP installed and enabled in .ai-e2e.json.\n');
+    const after = await detectPlaywright(root, config);
+    if (!after.found)
+        throw new AiE2eError('The coding CLI completed without creating a detectable Playwright setup.');
+    io.out(`Playwright setup verified (${after.configPath ?? after.dependency}); planner, generator and healer setup was delegated to ${provider.displayName}.\n`);
     return 0;
 }
 async function cmdUninstall(args, io) {

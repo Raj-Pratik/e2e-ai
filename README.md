@@ -97,13 +97,12 @@ cd /path/to/your/repository
 # Select Copilot or Claude when prompted.
 ai-e2e init --force
 
-# 7. Install Playwright MCP and enable it
+# 7. Let the coding CLI configure Playwright and install its agents
 ai-e2e playwright-init --yes
 
 # 8. Validate the setup
 ai-e2e config validate
 ai-e2e config get provider
-ai-e2e config get mcp.playwright.enabled
 ```
 
 For this repository, the final setup commands are:
@@ -115,10 +114,19 @@ ai-e2e playwright-init --yes
 ```
 
 `ai-e2e init` creates `.ai-e2e.json`, installs the pre-push integration and
-asks which provider to use. `ai-e2e playwright-init --yes` detects the existing
-Playwright setup, installs `@playwright/mcp`, and enables MCP. Commit the
-generated `.ai-e2e.json`, package manifest/lockfile changes, `.gitignore`
-entry, and hook changes after reviewing them.
+asks which provider to use. `ai-e2e playwright-init --yes` hands setup to the
+selected coding CLI. The agent inspects the repository, creates or verifies
+Playwright, runs `npx playwright init-agents --loop=vscode`, and installs the
+Copilot skills plugin when needed:
+
+```sh
+copilot plugin marketplace add mattpocock/skills
+copilot plugin install mattpocock-skills@mattpocock
+```
+
+The setup command does not install Playwright MCP. Commit the generated
+`.ai-e2e.json`, package manifest/lockfile changes, agent/config files,
+`.gitignore` entry, and hook changes after reviewing them.
 
 To change the provider later:
 
@@ -195,12 +203,13 @@ controlling terminal are reported as `no interactive terminal` and cannot be
 prompted.
 
 On an accepted push, the selected Copilot or Claude CLI runs in the invoking
-terminal. Its task requires a planning phase, user questions and explicit plan
-approval, Playwright MCP exploration, focused test generation, execution of new
-specs, and a generator/healer retry loop. Product changes should result in
-separate scenario specs and shared helpers; documentation, package metadata,
-Docker/Kubernetes, CI and other non-product changes may be explicitly classified
-as not requiring E2E coverage.
+terminal. Its task uses the Playwright planner, generator and healer agents.
+Questions are limited to compact multiple-choice questions when an answer
+changes coverage; clear flows proceed without questions. The agent generates
+separate scenario specs and shared helpers, runs the new specs, and repeats the
+generator/healer loop until they pass or a concrete environment blocker is
+reported. Documentation, package metadata, Docker/Kubernetes, CI and other
+non-product changes are classified without unnecessary questioning.
 
 The hook first resolves the installed `ai-e2e` command from `PATH`, so the
 same hook can be shared by every developer. If the command is unavailable, it
@@ -241,7 +250,6 @@ ai-e2e generate                         # upstream..HEAD, interactively and bloc
 ai-e2e generate --base origin/develop --foreground
 ai-e2e status && ai-e2e logs --tail 50
 ai-e2e config set provider claude
-ai-e2e config set mcp.playwright.enabled true
 AI_E2E_SKIP=1 git push                  # bypass entirely
 AI_E2E_ASSUME=yes git push              # accept without a prompt (explicit opt-in)
 ```
@@ -271,9 +279,6 @@ Unknown keys and wrong types are rejected with the offending path. See [examples
 | `generation.interactive` | `true` | Keep the selected provider in the terminal for questions and approval |
 | `generation.commitGeneratedTests` | `true` | Commit generated tests after they pass |
 | `playwright.testCommand` | local Playwright CLI | argv array; generated spec paths are appended |
-| `mcp.playwright.enabled` | `false` | Offer Playwright MCP to the agent |
-| `mcp.playwright.command` / `args` | `npx @playwright/mcp@latest` | MCP server command |
-| `mcp.playwright.baseUrl` | `null` | Only URL the agent is told it may visit |
 | `context.exclude` | `[]` | Extra glob exclusions |
 | `context.excludeGenerated` | `true` | Skip lockfiles, build output, binaries |
 | `context.maxFiles` / `maxCommits` | `60` / `50` | Analysis limits |
@@ -310,7 +315,7 @@ Claude Code is **not installed on the machine this was built on**; the invocatio
 
 ```
 claude -p "<instruction>" --output-format text --permission-mode acceptEdits --no-session-persistence \
-  --max-turns 40 [--model m] [--mcp-config <json> --strict-mcp-config --allowedTools mcp__playwright] \
+  --max-turns 40 [--model m] \
   --disallowedTools Bash --disallowedTools WebFetch --disallowedTools WebSearch
 ```
 
@@ -326,13 +331,12 @@ Verify once with a real run (`ai-e2e config set provider claude && ai-e2e genera
 
 Settings for the new id work automatically under `providers.<id>`.
 
-## Playwright MCP (optional)
+## Playwright agents
 
-Disabled by default. When enabled, and the provider supports MCP, and `mcp.playwright.command` resolves on `PATH`, the
-server is passed to the agent for this run only (`--additional-mcp-config` for Copilot, `--mcp-config
---strict-mcp-config` for Claude). Otherwise the job logs why and falls back to source analysis. ai-e2e never starts your
-application; set `baseUrl` to an app you are already running locally. The task forbids destructive UI actions and
-production systems, but this is an instruction to the agent, not an enforcement boundary.
+`ai-e2e playwright-init --yes` delegates repository setup to the selected coding CLI. The setup agent verifies or
+creates Playwright, runs `npx playwright init-agents --loop=vscode`, and makes the planner, generator and healer
+agents available to the coding CLI. The generation task uses those agents and does not install or configure Playwright
+MCP.
 
 ## Jobs, logs and output
 
