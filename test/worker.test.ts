@@ -142,4 +142,19 @@ describe('background worker job execution', () => {
     assert.equal(job.testRun?.passed, false);
     assert.match(job.error ?? '', /did not pass/);
   });
+
+  it('invokes the healer and reruns tests until they pass', async () => {
+    const marker = path.join(tmpDir(), 'healed');
+    const command = [
+      process.execPath,
+      '-e',
+      `const fs=require('node:fs'); const marker=${JSON.stringify(marker)}; if (fs.existsSync(marker)) process.exit(0); fs.writeFileSync(marker, 'failed once'); process.exit(1);`,
+    ];
+    const config = fakeProviderConfig({ playwright: { runGeneratedTests: true, testCommand: command } });
+    const { root, jobId } = await prepare({ config });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.equal(job.testRun?.passed, true);
+    assert.ok(logs.some((line) => /playwright-test-healer \(attempt 1\/3\)/.test(line)));
+  });
 });

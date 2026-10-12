@@ -164,6 +164,11 @@ does not pass. If the change is documentation-only, package metadata, Docker,
 Kubernetes, CI, or another non-product change, the planner can explain why E2E
 coverage is unnecessary and ask for confirmation to skip it.
 
+Test execution is enforced by the worker, not left to the provider prompt: after
+each failed Playwright run it invokes `playwright-test-healer`, applies only
+generated-test/helper fixes, and reruns the exact specs. It makes up to three
+healing attempts; if the tests still fail, the push remains blocked.
+
 When generated tests pass, ai-e2e commits them during the hook, allows the
 original push to finish, verifies that the feature commit reached the remote,
 and performs a guarded follow-up push automatically. No special push command

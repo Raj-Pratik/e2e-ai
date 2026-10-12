@@ -23,6 +23,7 @@ const PLAYWRIGHT_AGENT_FILES = [
   '.github/agents/playwright-test-generator.agent.md',
   '.github/agents/playwright-test-healer.agent.md',
 ];
+const MAX_HEALING_ATTEMPTS = 3;
 
 export interface WorkerOptions {
   repoRoot: string;
@@ -238,11 +239,11 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
 
     const providerOut = lineWriter(log, `[${provider.id}] `);
-    const runProvider = async (model: string | null) => {
+    const runProvider = async (model: string | null, prompt: string) => {
       if (model) normalizePlaywrightAgentModels(root, model);
       const invocation = provider.buildInvocation({
         repoRoot: root,
-        instruction,
+        instruction: prompt,
         settings: { ...settings, model },
         mcp: null,
         secretEnvNames: secretEnvNames(process.env),
@@ -259,18 +260,22 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
         ...(signal ? { signal } : {}),
       });
     };
-    let result = await runProvider(settings.model);
-    for (const fallbackModel of settings.fallbackModels) {
-      if (result.exitCode === 0 || result.error || result.aborted || result.timedOut) break;
-      log(`Provider exited unsuccessfully; retrying with fallback model ${fallbackModel}.`);
-      result = await runProvider(fallbackModel);
-    }
+    const runWithFallbacks = async (prompt: string) => {
+      let attempt = await runProvider(settings.model, prompt);
+      for (const fallbackModel of settings.fallbackModels) {
+        if (attempt.exitCode === 0 || attempt.error || attempt.aborted || attempt.timedOut) break;
+        log(`Provider exited unsuccessfully; retrying with fallback model ${fallbackModel}.`);
+        attempt = await runProvider(fallbackModel, prompt);
+      }
+      return attempt;
+    };
+    let result = await runWithFallbacks(instruction);
     providerOut.flush();
 
     const restored = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
     const listedAfter = await listFiles(root, scanDirs);
     const known = new Set(listedBefore);
-    const generatedFiles = listedAfter.filter((f) => !known.has(f) && fs.existsSync(path.join(root, f))).sort();
+    let generatedFiles = listedAfter.filter((f) => !known.has(f) && fs.existsSync(path.join(root, f))).sort();
 
     const warnings = [...restored.warnings];
     const statusAfter = await statusSnapshot(root);
@@ -305,10 +310,44 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
       throw new AiE2eError('The coding CLI finished without creating a new Playwright spec. The push is blocked; no test result can be assumed.');
     }
     let testRun: TestRunResult | undefined;
-    testRun = (await runGeneratedTests(root, config, setup, specs, log, signal)) ?? undefined;
-    if (testRun) job = store.update(jobId, { testRun });
-    if (!testRun?.passed) {
-      throw new AiE2eError('Generated Playwright tests did not pass; the push is blocked.');
+    let currentSpecs = specs;
+    for (let healingAttempt = 0; healingAttempt <= MAX_HEALING_ATTEMPTS; healingAttempt += 1) {
+      testRun = (await runGeneratedTests(root, config, setup, currentSpecs, log, signal)) ?? undefined;
+      if (testRun) job = store.update(jobId, { testRun });
+      if (testRun?.passed) break;
+      if (!testRun) break;
+      if (healingAttempt === MAX_HEALING_ATTEMPTS) {
+        throw new AiE2eError(`Generated Playwright tests did not pass after ${MAX_HEALING_ATTEMPTS} healing attempt(s); the push is blocked.`);
+      }
+
+      const healerPrompt = `Read the task specification at \`${taskRel}\`. The approved Playwright plan is at \`${path.relative(root, planFile).split(path.sep).join('/')}\`.
+The newly generated specs are: ${currentSpecs.map((spec) => `\`${spec}\``).join(', ')}.
+The last Playwright run failed. Invoke \`playwright-test-healer\` now, inspect the actual failure output and traces,
+and patch only these generated specs or their generated helpers. Do not ask for approval again, do not create unrelated
+files, and do not claim success without running the exact Playwright command. Fix the failure, save the changes, and exit.`;
+      log(`Invoking playwright-test-healer (attempt ${healingAttempt + 1}/${MAX_HEALING_ATTEMPTS}).`);
+      const healingResult = await runWithFallbacks(healerPrompt);
+      providerOut.flush();
+      if (healingResult.error || healingResult.exitCode !== 0) {
+        const reason = healingResult.aborted
+          ? 'interrupted'
+          : healingResult.timedOut
+            ? `timed out after ${config.generation.timeoutSeconds}s`
+            : healingResult.error
+              ? healingResult.error.message
+              : `exit code ${healingResult.exitCode ?? healingResult.signal}`;
+        throw new AiE2eError(`Playwright healer failed: ${reason}. ${redact(healingResult.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
+      }
+      const healed = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
+      restored.patches.push(...healed.patches);
+      restored.warnings.push(...healed.warnings);
+      const afterHealing = await listFiles(root, scanDirs);
+      currentSpecs = afterHealing
+        .filter((file) => !known.has(file) && fs.existsSync(path.join(root, file)))
+        .filter((file) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(file))
+        .sort();
+      if (!currentSpecs.length) throw new AiE2eError('The healer removed every generated Playwright spec; the push is blocked.');
+      generatedFiles = afterHealing.filter((file) => !known.has(file) && fs.existsSync(path.join(root, file))).sort();
     }
     if (config.generation.commitGeneratedTests) {
       await git(root, ['add', '--', ...generatedFiles]);
