@@ -72,8 +72,15 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
     If the flow is clear from the diff, source and existing tests, ask no questions and proceed.
   - The planner step is mandatory for every product change, including simple flows. Invoke
     \`playwright-test-planner\` first and present its proposed files, scenarios, user actions, assertions, fixtures,
-    and environment prerequisites in the terminal. Wait for an explicit user approval or requested revision.
+    and environment prerequisites in the terminal. Save the same complete plan as Markdown at
+    \`${path.relative(repoRoot, input.jobDir).split(path.sep).join('/')}/plan.md\` before requesting approval.
+    Wait for an explicit user approval or requested revision.
     Do not invoke \`playwright-test-generator\`, create a spec, or modify any test helper before approval.
+  - The plan artifact is the contract for generation. After approval, the generator must read that exact Markdown file
+    and the task specification before writing a spec. If the plan file is missing or empty, stop and report a blocker.
+  - If a Playwright agent tool reports that it cannot access the repository or a local page, do not stop solely for that
+    reason: use the repository root, task specification, plan artifact, source search and existing tests directly.
+    Never invent selectors or claim a browser observation that did not occur.
   - After approval, invoke \`playwright-test-generator\` to create the approved tests. Run them with the repository's
     Playwright command. After every failed run, invoke \`playwright-test-healer\`, apply only its generated-test/helper
     fixes, and rerun the tests. Repeat until the tests pass or a concrete environment blocker is reported.
@@ -85,6 +92,7 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
   If an existing test or helper must change, describe the proposed patch in your final answer instead of editing it.
+  The only non-test file the workflow may create is the plan artifact at the exact job path above.
 - Do NOT run git commands that change state (commit, push, add, reset, checkout, stash). Do NOT install packages.
 - Do NOT read or reference secrets, credentials, \`.env\` files, auth storage-state files or private keys.
 - Do NOT start servers, contact production systems, or perform destructive actions.
@@ -108,6 +116,8 @@ result if you ran it, (4) any proposed patches to existing files, (5) concrete b
 assumptions as if they were completion criteria.
 `);
     budget.add(`## Repository Playwright setup
+- Repository root: \`${repoRoot}\`
+- Task specification: \`${path.join(repoRoot, path.relative(repoRoot, input.jobDir), 'task.md')}\`
 - Playwright config: ${setup.configPath ? `\`${setup.configPath}\`` : 'none found'}
 - Test directory: \`${setup.testDir}\` (${setup.testDirSource}); write new tests under \`${out}/\`
 - Existing test files: ${setup.testFiles.length}
@@ -115,7 +125,9 @@ assumptions as if they were completion criteria.
 `);
     budget.add(`## Playwright agents
 Use \`playwright-test-planner\`, \`playwright-test-generator\`, and \`playwright-test-healer\`. They were installed by
-\`npx playwright init-agents --loop=vscode\`. Do not use Playwright MCP and do not install MCP packages.
+\`npx playwright init-agents --loop=vscode\`. Do not navigate to \`file:\` URLs. If no authorized HTTP application URL
+is available, skip browser setup/MCP navigation and use repository source, the diff, and existing tests; never treat
+that as permission to invent selectors or environment behavior.
 `);
     const commitLines = changeSet.ranges.flatMap((r) => [
         `- \`${r.localRef}\` → \`${r.remoteRef}\` (${r.commitCount} commit(s)${r.forced ? ', force push' : ''})`,

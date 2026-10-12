@@ -18,6 +18,7 @@ if (!taskRel || !fs.existsSync(taskRel)) {
 }
 const task = fs.readFileSync(taskRel, 'utf8');
 if (process.env.FAKE_TASK_COPY) fs.writeFileSync(process.env.FAKE_TASK_COPY, task);
+fs.writeFileSync(path.join(path.dirname(taskRel), 'plan.md'), '# Approved test plan\n\n- Generated test scenario\n');
 
 const outDir = /under `([^`]+)\/`/.exec(task)?.[1] ?? 'e2e';
 const target = path.join(outDir, process.env.FAKE_TARGET ?? 'generated-feature.spec.ts');

@@ -224,7 +224,10 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     log('Playwright MCP is not used; Playwright agent definitions are managed by the coding CLI setup.');
 
     const taskFile = path.join(jobDir, TASK_FILE);
-    fs.writeFileSync(taskFile, buildTask({ repoRoot: root, changeSet, setup, config, mcp: null, mcpNote: 'managed by Playwright agents instead' }));
+    fs.writeFileSync(
+      taskFile,
+      buildTask({ repoRoot: root, jobDir, changeSet, setup, config, mcp: null, mcpNote: 'managed by Playwright agents instead' }),
+    );
     const taskRel = path.relative(root, taskFile).split(path.sep).join('/');
     const instruction = `Read the task specification in \`${taskRel}\` and complete it exactly. Follow every rule in that file.`;
 
@@ -290,6 +293,11 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
             ? result.error.message
             : `exit code ${result.exitCode ?? result.signal}`;
       throw new AiE2eError(`${provider.displayName} failed: ${reason}. ${redact(result.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
+    }
+
+    const planFile = path.join(jobDir, 'plan.md');
+    if (!fs.existsSync(planFile) || fs.statSync(planFile).size === 0) {
+      throw new AiE2eError('The planner did not create a non-empty plan artifact; no tests may be generated.');
     }
 
     const specs = generatedFiles.filter((f) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(f));
