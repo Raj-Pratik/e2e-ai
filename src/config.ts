@@ -9,6 +9,7 @@ export type DuplicatePolicy = 'skip' | 'allow';
 export interface ProviderSettings {
   command: string | null;
   model: string | null;
+  fallbackModels: string[];
   extraArgs: string[];
   allowUnsafeArgs: boolean;
   allowedShellCommands: string[];
@@ -59,14 +60,17 @@ export interface Config {
 }
 
 export function defaultProviderSettings(): ProviderSettings {
-  return { command: null, model: null, extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
+  return { command: null, model: null, fallbackModels: [], extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
 }
 
 export function defaultConfig(): Config {
   return {
     enabled: true,
     provider: 'copilot',
-    providers: { copilot: defaultProviderSettings(), claude: defaultProviderSettings() },
+    providers: {
+      copilot: { ...defaultProviderSettings(), model: 'gpt-6-luna', fallbackModels: ['gpt-5.6-terra'] },
+      claude: { ...defaultProviderSettings(), model: 'claude-haiku-5.5', fallbackModels: ['claude-sonnet-5.5'] },
+    },
     prompt: { timeoutSeconds: 60 },
     generation: {
       timeoutSeconds: 900,
@@ -162,6 +166,7 @@ const record =
 const providerSchema = obj({
   command: nullable(str),
   model: nullable(str),
+  fallbackModels: strArray,
   extraArgs: strArray,
   allowUnsafeArgs: bool,
   allowedShellCommands: strArray,

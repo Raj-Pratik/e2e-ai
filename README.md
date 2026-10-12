@@ -283,7 +283,9 @@ Unknown keys and wrong types are rejected with the offending path. See [examples
 | `enabled` | `true` | Master switch for the hook |
 | `provider` | `"copilot"` | `copilot` or `claude` |
 | `providers.<id>.command` | provider default | CLI path/name |
-| `providers.<id>.model` | `null` | Passed as `--model` |
+| `providers.copilot.model` | `gpt-6-luna` | Primary Copilot model |
+| `providers.claude.model` | `claude-haiku-5.5` | Primary Claude model |
+| `providers.<id>.fallbackModels` | `[]` | Models tried if the provider exits before completing |
 | `providers.<id>.extraArgs` | `[]` | Extra argv (array, never a shell string). Permission-bypassing flags are rejected unless `allowUnsafeArgs: true` |
 | `providers.<id>.allowedShellCommands` | `[]` | Shell access for the agent; empty = none |
 | `providers.claude.maxTurns` | `40` | `--max-turns` |

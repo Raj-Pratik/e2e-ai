@@ -3,13 +3,16 @@ import path from 'node:path';
 import { AiE2eError, errorMessage } from './errors.js';
 export const CONFIG_FILE = '.ai-e2e.json';
 export function defaultProviderSettings() {
-    return { command: null, model: null, extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
+    return { command: null, model: null, fallbackModels: [], extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
 }
 export function defaultConfig() {
     return {
         enabled: true,
         provider: 'copilot',
-        providers: { copilot: defaultProviderSettings(), claude: defaultProviderSettings() },
+        providers: {
+            copilot: { ...defaultProviderSettings(), model: 'gpt-6-luna', fallbackModels: ['gpt-5.6-terra'] },
+            claude: { ...defaultProviderSettings(), model: 'claude-haiku-5.5', fallbackModels: ['claude-sonnet-5.5'] },
+        },
         prompt: { timeoutSeconds: 60 },
         generation: {
             timeoutSeconds: 900,
@@ -93,6 +96,7 @@ const record = (check) => (v, at) => {
 const providerSchema = obj({
     command: nullable(str),
     model: nullable(str),
+    fallbackModels: strArray,
     extraArgs: strArray,
     allowUnsafeArgs: bool,
     allowedShellCommands: strArray,

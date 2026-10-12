@@ -168,25 +168,34 @@ export async function runJob(options) {
         const before = snapshotFiles(root, listedBefore);
         const statusBefore = await statusSnapshot(root);
         const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
-        const invocation = provider.buildInvocation({
-            repoRoot: root,
-            instruction,
-            settings,
-            mcp: null,
-            secretEnvNames: secretEnvNames(process.env),
-            interactive,
-        });
-        log(`Invoking ${invocation.command} (timeout ${config.generation.timeoutSeconds}s).`);
         const providerOut = lineWriter(log, `[${provider.id}] `);
-        const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
-            cwd: root,
-            timeoutMs: config.generation.timeoutSeconds * 1000,
-            maxOutputBytes: config.generation.maxOutputBytes,
-            killProcessGroup: !interactive,
-            onOutput: (chunk) => providerOut.write(chunk),
-            interactive,
-            ...(signal ? { signal } : {}),
-        });
+        const runProvider = async (model) => {
+            const invocation = provider.buildInvocation({
+                repoRoot: root,
+                instruction,
+                settings: { ...settings, model },
+                mcp: null,
+                secretEnvNames: secretEnvNames(process.env),
+                interactive,
+            });
+            log(`Invoking ${invocation.command}${model ? ` with model ${model}` : ''} (timeout ${config.generation.timeoutSeconds}s).`);
+            return runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
+                cwd: root,
+                timeoutMs: config.generation.timeoutSeconds * 1000,
+                maxOutputBytes: config.generation.maxOutputBytes,
+                killProcessGroup: !interactive,
+                onOutput: (chunk) => providerOut.write(chunk),
+                interactive,
+                ...(signal ? { signal } : {}),
+            });
+        };
+        let result = await runProvider(settings.model);
+        for (const fallbackModel of settings.fallbackModels) {
+            if (result.exitCode === 0 || result.error || result.aborted || result.timedOut)
+                break;
+            log(`Provider exited unsuccessfully; retrying with fallback model ${fallbackModel}.`);
+            result = await runProvider(fallbackModel);
+        }
         providerOut.flush();
         const restored = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
         const listedAfter = await listFiles(root, scanDirs);
