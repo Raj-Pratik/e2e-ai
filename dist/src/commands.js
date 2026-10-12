@@ -26,6 +26,7 @@ Commands:
   init [--no-hook] [--force]          Create .ai-e2e.json, ignore runtime state, install the pre-push hook
   generate [--base <rev>] [--head <rev>] [--provider <id>] [--foreground] [--force]
                                       Generate tests for base..head (default: upstream..HEAD)
+  push [git push options and refs]           Generate, validate, commit, then safely push
   status [<job-id>] [--json] [--limit <n>]
                                       Show recent or specific generation jobs
   logs [<job-id>] [--tail <n>]        Print a job log (default: latest job)
@@ -243,6 +244,31 @@ async function cmdGenerate(args, io) {
         }
     }
 }
+async function cmdPush(args, io) {
+    const generationExit = await cmdGenerate(['--foreground', '--force'], io);
+    if (generationExit !== 0) {
+        io.err('ai-e2e: generation did not pass; nothing was pushed.\n');
+        return generationExit;
+    }
+    if (!hasInteractiveTerminal())
+        throw new AiE2eError('ai-e2e push requires an interactive terminal for Git authentication and provider interaction.');
+    const pushArgs = args.length ? args : ['push'];
+    io.out(`Running: git ${pushArgs.join(' ')}\n`);
+    const result = await runProcess('git', pushArgs, {
+        cwd: io.cwd,
+        env: { ...io.env, AI_E2E_SKIP: '1' },
+        interactive: true,
+        onOutput: (chunk) => io.out(chunk),
+    });
+    if (result.error)
+        throw new AiE2eError(`git push could not be executed: ${result.error.message}`);
+    if (result.exitCode !== 0) {
+        io.err(`git push failed${result.stderr.trim() ? `: ${result.stderr.trim()}` : ` (exit code ${result.exitCode})`}.\n`);
+        return 1;
+    }
+    io.out('ai-e2e: generation passed, generated tests were committed, and the push completed.\n');
+    return 0;
+}
 async function cmdStatus(args, io) {
     const { values, positionals } = parse(args, { json: { type: 'boolean' }, limit: { type: 'string' } });
     const { store } = await context(io);
@@ -453,6 +479,7 @@ async function cmdWorker(args, io) {
 const COMMANDS = {
     init: cmdInit,
     generate: cmdGenerate,
+    push: cmdPush,
     status: cmdStatus,
     logs: cmdLogs,
     config: cmdConfig,

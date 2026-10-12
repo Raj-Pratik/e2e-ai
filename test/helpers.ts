@@ -99,6 +99,7 @@ export function fakeProviderConfig(extra: Record<string, unknown> = {}): Record<
     providers: { copilot: { command: FAKE_PROVIDER } },
     prompt: { timeoutSeconds: 2 },
     generation: { interactive: false, commitGeneratedTests: false },
+    playwright: { testCommand: [process.execPath, '-e', 'process.exit(0)'] },
     ...extra,
   };
 }

@@ -214,27 +214,31 @@ export async function runJob(options) {
             throw new AiE2eError(`${provider.displayName} failed: ${reason}. ${redact(result.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
         }
         const specs = generatedFiles.filter((f) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(f));
+        if (!specs.length) {
+            throw new AiE2eError('The coding CLI finished without creating a new Playwright spec. The push is blocked; no test result can be assumed.');
+        }
         let testRun;
-        if ((config.playwright.runGeneratedTests || interactive) && specs.length) {
-            testRun = (await runGeneratedTests(root, config, setup, specs, log, signal)) ?? undefined;
-            if (testRun)
-                job = store.update(jobId, { testRun });
-            if (!testRun?.passed) {
-                throw new AiE2eError('Generated Playwright tests did not pass; the push is blocked.');
-            }
-            if (config.generation.commitGeneratedTests) {
-                await git(root, ['add', '--', ...generatedFiles]);
-                await git(root, [
-                    'commit',
-                    '--only',
-                    '-m',
-                    'test: add generated Playwright coverage',
-                    '-m',
-                    'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
-                    '--',
-                    ...generatedFiles,
-                ]);
-                log('Committed generated Playwright tests after a passing run.');
+        testRun = (await runGeneratedTests(root, config, setup, specs, log, signal)) ?? undefined;
+        if (testRun)
+            job = store.update(jobId, { testRun });
+        if (!testRun?.passed) {
+            throw new AiE2eError('Generated Playwright tests did not pass; the push is blocked.');
+        }
+        if (config.generation.commitGeneratedTests) {
+            await git(root, ['add', '--', ...generatedFiles]);
+            await git(root, [
+                'commit',
+                '--only',
+                '-m',
+                'test: add generated Playwright coverage',
+                '-m',
+                'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
+                '--',
+                ...generatedFiles,
+            ]);
+            log('Committed generated Playwright tests after a passing run.');
+            if (job.source === 'pre-push') {
+                throw new AiE2eError('Generated Playwright tests were committed locally after passing. Run git push again to publish both the feature and generated tests.');
             }
         }
         const summary = summarize({ generatedFiles, proposedPatches: restored.patches, ...(testRun ? { testRun } : {}) }, setup);

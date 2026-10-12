@@ -56,20 +56,31 @@ export function buildTask(input) {
 You are generating end-to-end tests for code that a developer is pushing. Work only inside this repository.
 
 ## Rules (mandatory)
+- Constitutional gate: never create, edit, or generate a Playwright spec before
+  \`playwright-test-planner\` has presented a plan in this terminal and the user has explicitly approved it.
+  This rule applies even when the flow appears simple. Never infer approval from silence, a prior answer, or the
+  initial request to generate tests.
   - Stay focused on browser coverage. Do not ask open-ended motivation or "why" questions.
   - First inspect the outgoing commits and classify the change. Documentation, Docker/Kubernetes, CI/CD, package
     metadata, generated output and test-only changes normally need no E2E test; state that briefly and continue without
     asking a question when the classification is unambiguous.
-  - For a product flow, use the installed Copilot skills from \`mattpocock/skills\` when available and use the
-    Playwright planner, generator and healer agent definitions created by \`npx playwright init-agents --loop=vscode\`.
+  - For a product flow, use the installed Copilot skills from \`mattpocock/skills\` when available and use these
+    exact Playwright agent definitions created by \`npx playwright init-agents --loop=vscode\`:
+    \`playwright-test-planner\`, \`playwright-test-generator\`, and \`playwright-test-healer\`.
   - Ask questions only when an answer changes the test plan. Use compact multiple-choice questions (A/B/C, with an
     "Other" option), covering only the critical user path, expected assertion, role/data fixture and environment.
     If the flow is clear from the diff, source and existing tests, ask no questions and proceed.
-  - Present a concise test plan and request approval only when the plan is materially ambiguous or risky. For a simple
-    flow, proceed directly with the planner and generator agents.
-  - Use the planner agent to identify critical scenarios and assertions, the generator agent to create the tests, and
-    the healer agent after every failed Playwright run. Repeat generator/run/heal until the newly generated tests pass
-    or a concrete environment blocker is reported. Do not declare success merely because the coding CLI exited.
+  - The planner step is mandatory for every product change, including simple flows. Invoke
+    \`playwright-test-planner\` first and present its proposed files, scenarios, user actions, assertions, fixtures,
+    and environment prerequisites in the terminal. Wait for an explicit user approval or requested revision.
+    Do not invoke \`playwright-test-generator\`, create a spec, or modify any test helper before approval.
+  - After approval, invoke \`playwright-test-generator\` to create the approved tests. Run them with the repository's
+    Playwright command. After every failed run, invoke \`playwright-test-healer\`, apply only its generated-test/helper
+    fixes, and rerun the tests. Repeat until the tests pass or a concrete environment blocker is reported.
+  - If any of the three named agents is unavailable, stop and report the setup problem instead of silently writing
+    tests without the required planner/generator/healer workflow.
+  - Before finishing, explicitly report whether the user approved the plan, which generator agent ran, which Playwright
+    command actually ran, and whether the healer was needed. Missing evidence means the workflow is incomplete.
   - Do not use Playwright MCP. Explore through the Playwright agents and repository source instead.
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
@@ -87,10 +98,14 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
 - Run every newly generated test with the repository's Playwright command. Read the Playwright output, traces and
   reporter metrics. If a test fails, diagnose the failure and patch only the generated tests/helpers, then rerun it.
   Repeat the generate/run/heal cycle until the new tests pass or a concrete environment blocker is reported.
+- Never claim that tests passed, were healed, or are complete based on intent or static inspection. The outer ai-e2e
+  worker will run the exact generated specs after this session closes; if the app server or auth setup is required,
+  rely on the repository Playwright configuration to start it and run its setup dependencies.
 
 ## Final answer
-Reply with: (1) the list of files you created, (2) what each test covers, (3) any proposed patches to existing files,
-(4) assumptions or gaps. Keep it concise.
+Reply with: (1) the list of files you created, (2) what each test covers, (3) the observed Playwright command and
+result if you ran it, (4) any proposed patches to existing files, (5) concrete blockers only. Do not list unverified
+assumptions as if they were completion criteria.
 `);
     budget.add(`## Repository Playwright setup
 - Playwright config: ${setup.configPath ? `\`${setup.configPath}\`` : 'none found'}
@@ -99,7 +114,7 @@ Reply with: (1) the list of files you created, (2) what each test covers, (3) an
 - Playwright-related package scripts: ${Object.keys(setup.scripts).length ? Object.entries(setup.scripts).map(([k, v]) => `\`${k}\` → \`${v}\``).join('; ') : 'none'}
 `);
     budget.add(`## Playwright agents
-Use the repository's Playwright planner, generator and healer agent definitions. They were installed by
+Use \`playwright-test-planner\`, \`playwright-test-generator\`, and \`playwright-test-healer\`. They were installed by
 \`npx playwright init-agents --loop=vscode\`. Do not use Playwright MCP and do not install MCP packages.
 `);
     const commitLines = changeSet.ranges.flatMap((r) => [

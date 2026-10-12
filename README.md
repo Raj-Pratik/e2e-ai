@@ -149,20 +149,37 @@ To generate tests manually for the current branch against a base branch:
 ai-e2e generate --base origin/main
 ```
 
-To use the normal push workflow:
+To use the safe one-command push workflow:
 
 ```sh
 git add .
 git commit -m "Describe the product change"
-git push
+ai-e2e push
 ```
 
-Answer `y` at the ai-e2e prompt. The selected provider then asks about the
+The selected provider then asks about the
 feature, creates a plan, waits for approval, generates tests, runs the new
 Playwright specs, heals failures, and blocks the push if the accepted workflow
 does not pass. If the change is documentation-only, package metadata, Docker,
 Kubernetes, CI, or another non-product change, the planner can explain why E2E
 coverage is unnecessary and ask for confirmation to skip it.
+
+Direct `git push` remains supported for hook-only gating, but if generated
+tests are committed during that hook it stops and tells you to rerun through
+`ai-e2e push`; this is required because Git cannot safely perform a nested push
+from inside a pre-push hook.
+
+For one-command publishing that safely includes the generated-test commit, use
+the ai-e2e wrapper instead of calling `git push` directly:
+
+```sh
+ai-e2e push
+# or: ai-e2e push origin experiment
+```
+
+It runs the planner/approval/generator/healer workflow, verifies the generated
+specs with Playwright, commits them, and only then runs the final Git push with
+the hook bypassed. This avoids recursively pushing from inside a pre-push hook.
 
 ## Build from source
 
@@ -234,6 +251,7 @@ pre-push:
 ```sh
 ai-e2e init [--no-hook] [--force]
 ai-e2e generate [--base <rev>] [--head <rev>] [--provider <id>] [--foreground] [--force]
+ai-e2e push [git push options and refs]
 ai-e2e status [<job-id>] [--json] [--limit <n>]
 ai-e2e logs [<job-id>] [--tail <n>]
 ai-e2e config [show | get <key> | set <key> <value> | validate | path]
