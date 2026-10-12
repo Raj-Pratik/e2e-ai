@@ -218,7 +218,7 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
       cwd: root,
       timeoutMs: config.generation.timeoutSeconds * 1000,
       maxOutputBytes: config.generation.maxOutputBytes,
-      killProcessGroup: true,
+      killProcessGroup: !interactive,
       onOutput: (chunk) => providerOut.write(chunk),
       interactive,
       ...(signal ? { signal } : {}),
