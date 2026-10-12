@@ -1,0 +1,24 @@
+{
+  "provider": "copilot",
+  "providers": {
+    "copilot": { "model": null, "extraArgs": [] },
+    "claude": { "model": "sonnet", "maxTurns": 40 }
+  },
+  "prompt": { "timeoutSeconds": 60 },
+  "generation": { "timeoutSeconds": 900, "outputDir": null, "allowModifyExistingTests": false },
+  "playwright": { "runGeneratedTests": false, "testCommand": null },
+  "mcp": {
+    "playwright": {
+      "enabled": false,
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "baseUrl": "http://localhost:4000"
+    }
+  },
+  "context": {
+    "exclude": ["build_shore/**", "assets/**"],
+    "maxFiles": 60,
+    "maxTotalDiffBytes": 120000
+  },
+  "jobs": { "duplicate": "skip", "stateDir": ".ai-e2e", "keep": 30 }
+}

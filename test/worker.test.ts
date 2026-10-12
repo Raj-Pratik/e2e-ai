@@ -1,0 +1,145 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+import { analyzeOutgoing } from '../src/changes.js';
+import { loadConfig, stateDirPath } from '../src/config.js';
+import { JobStore } from '../src/jobs.js';
+import { startJob } from '../src/launcher.js';
+import { parsePrePushInput } from '../src/refs.js';
+import { runJob } from '../src/worker.js';
+import { commit, createRepo, fakeProviderConfig, git, tmpDir, writeConfig } from './helpers.js';
+
+const logs: string[] = [];
+const log = (line: string): void => {
+  logs.push(line);
+};
+
+async function prepare(options: { config?: Record<string, unknown>; playwright?: boolean } = {}) {
+  const repo = createRepo({ playwright: options.playwright ?? true });
+  writeConfig(repo.root, options.config ?? fakeProviderConfig());
+  git(repo.root, 'add', '.ai-e2e.json');
+  git(repo.root, 'commit', '-q', '-m', 'config');
+  git(repo.root, 'push', '-q', 'origin', 'main');
+  const remoteSha = git(repo.root, 'rev-parse', 'origin/main').trim();
+  const head = commit(repo.root, { 'src/checkout.ts': 'export const checkout = () => "pay";\n' }, 'add checkout');
+  const refs = parsePrePushInput(`refs/heads/main ${head} refs/heads/main ${remoteSha}`);
+  const { config } = loadConfig(repo.root);
+  const store = new JobStore(stateDirPath(repo.root, config));
+  const changes = await analyzeOutgoing(repo.root, 'origin', refs, config.context, { withDiffs: false });
+  const started = await startJob({ repoRoot: repo.root, config, store, refs, remote: 'origin', fingerprint: changes.fingerprint, source: 'pre-push', background: false });
+  assert.equal(started.kind, 'created');
+  return { root: repo.root, store, jobId: started.kind === 'created' ? started.job.id : '' };
+}
+
+describe('background worker job execution', () => {
+  afterEach(() => {
+    for (const key of Object.keys(process.env)) if (key.startsWith('FAKE_')) delete process.env[key];
+    logs.length = 0;
+  });
+
+  it('generates a new test, keeps it uncommitted and records the result', async () => {
+    const { root, store, jobId } = await prepare();
+    const taskCopy = path.join(tmpDir(), 'task.md');
+    process.env.FAKE_TASK_COPY = taskCopy;
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.deepEqual(job.generatedFiles, ['e2e/generated-feature.spec.ts']);
+    assert.match(job.summary ?? '', /npx playwright test e2e\/generated-feature.spec.ts/);
+    assert.equal(git(root, 'status', '--porcelain', '--', 'e2e').trim(), '?? e2e/generated-feature.spec.ts');
+    assert.equal(git(root, 'diff', '--cached', '--name-only').trim(), '');
+    assert.ok(store.read(jobId)?.finishedAt);
+
+    const task = fs.readFileSync(taskCopy, 'utf8');
+    assert.match(task, /src\/checkout\.ts/);
+    assert.match(task, /under `e2e\/`/);
+    assert.match(task, /e2e\/fixtures\/auth\.ts/);
+    assert.match(task, /Playwright MCP\nNot available \(disabled in configuration\)/);
+    assert.ok(!logs.join('\n').includes('a'.repeat(36)), 'provider output must be redacted in logs');
+  });
+
+  it('marks the job failed when the provider exits non-zero', async () => {
+    const { root, jobId } = await prepare();
+    process.env.FAKE_MODE = 'fail';
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /exit code 3/);
+  });
+
+  it('stops the provider when the worker is interrupted', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ generation: { timeoutSeconds: 10 } }) });
+    process.env.FAKE_MODE = 'hang';
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 300);
+    const job = await runJob({ repoRoot: root, jobId, log, signal: controller.signal });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /interrupted/);
+  });
+
+  it('fails cleanly when the provider CLI is not installed', async () => {
+    const { root, jobId } = await prepare({ config: { provider: 'claude', providers: { claude: { command: 'no-such-claude-binary' } } } });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /Claude Code CLI is unavailable/);
+  });
+
+  it('restores existing tests changed by the agent and saves a patch instead', async () => {
+    const { root, jobId } = await prepare();
+    const existing = path.join(root, 'e2e', 'home.spec.ts');
+    const before = fs.readFileSync(existing, 'utf8');
+    process.env.FAKE_MODE = 'modify';
+    process.env.FAKE_MODIFY = existing;
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.equal(fs.readFileSync(existing, 'utf8'), before);
+    assert.equal(job.proposedPatches.length, 1);
+    assert.match(fs.readFileSync(path.join(root, job.proposedPatches[0]!), 'utf8'), /changed by agent/);
+    assert.ok(job.warnings.some((w) => /original restored/.test(w)));
+  });
+
+  it('warns about files changed outside the test directory', async () => {
+    const { root, jobId } = await prepare();
+    process.env.FAKE_MODE = 'outside';
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.ok(job.warnings.some((w) => /src\/agent-touched\.ts/.test(w)));
+  });
+
+  it('skips with guidance when the repository has no Playwright setup', async () => {
+    const { root, jobId } = await prepare({ playwright: false });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'skipped');
+    assert.match(job.summary ?? '', /npm init playwright@latest/);
+  });
+
+  it('falls back to source analysis when Playwright MCP is enabled but unavailable', async () => {
+    const config = fakeProviderConfig({ mcp: { playwright: { enabled: true, command: 'no-such-mcp-command' } } });
+    const { root, jobId } = await prepare({ config });
+    const argsFile = path.join(tmpDir(), 'args.json');
+    process.env.FAKE_ARGS_FILE = argsFile;
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.ok(!JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--additional-mcp-config'));
+    assert.ok(logs.some((l) => /Playwright MCP not used: MCP command "no-such-mcp-command" was not found/.test(l)));
+  });
+
+  it('passes MCP config to the provider when available', async () => {
+    const config = fakeProviderConfig({ mcp: { playwright: { enabled: true, command: process.execPath, args: ['mcp.js'], baseUrl: 'http://localhost:4000' } } });
+    const { root, jobId } = await prepare({ config });
+    const argsFile = path.join(tmpDir(), 'args.json');
+    const taskCopy = path.join(tmpDir(), 'task.md');
+    process.env.FAKE_ARGS_FILE = argsFile;
+    process.env.FAKE_TASK_COPY = taskCopy;
+    await runJob({ repoRoot: root, jobId, log });
+    assert.ok(JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--additional-mcp-config'));
+    assert.match(fs.readFileSync(taskCopy, 'utf8'), /Only navigate to http:\/\/localhost:4000/);
+  });
+
+  it('records failing generated tests without failing the job', async () => {
+    const config = fakeProviderConfig({ playwright: { runGeneratedTests: true, testCommand: [process.execPath, '-e', 'process.exit(1)'] } });
+    const { root, jobId } = await prepare({ config });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.equal(job.testRun?.passed, false);
+    assert.match(job.summary ?? '', /Test run: failed/);
+  });
+});
