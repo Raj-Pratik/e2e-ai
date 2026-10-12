@@ -45,6 +45,14 @@ describe('copilot invocation', () => {
     assert.ok(!args.some((a) => a.includes('mcp')));
   });
 
+  it('uses Copilot interactive mode so the agent can wait for user approval', () => {
+    const { args } = copilot.buildInvocation(request({ interactive: true }));
+    assert.deepEqual(args.slice(0, 2), ['-i', request().instruction]);
+    assert.ok(args.includes('--allow-all-tools'));
+    assert.ok(!args.includes('--no-ask-user'));
+    assert.ok(!args.includes('--silent'));
+  });
+
   it('denies dangerous shell commands when limited shell access is allowed', () => {
     const { args } = copilot.buildInvocation(request({ settings: { ...defaultProviderSettings(), allowedShellCommands: ['git log'] } }));
     assert.ok(!args.includes('--deny-tool=shell'));

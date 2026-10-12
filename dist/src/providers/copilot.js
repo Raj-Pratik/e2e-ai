@@ -39,7 +39,9 @@ export const copilotProvider = {
     verification: 'Verified against local `copilot --help` (v1.0.94).',
     buildInvocation(request) {
         const { settings } = request;
-        const args = ['-p', request.instruction, ...(request.interactive ? [] : ['--silent', '--no-ask-user']), '--allow-all-tools'];
+        const args = request.interactive
+            ? ['-i', request.instruction, '--allow-all-tools']
+            : ['-p', request.instruction, '--silent', '--no-ask-user', '--allow-all-tools'];
         const allowedShell = new Set(settings.allowedShellCommands.map((c) => c.trim()));
         if (allowedShell.size === 0) {
             args.push('--deny-tool=shell');
