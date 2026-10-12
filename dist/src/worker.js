@@ -16,6 +16,11 @@ import { buildTask } from './taskPrompt.js';
 export const REFS_FILE = 'refs.txt';
 export const TASK_FILE = 'task.md';
 const SNAPSHOT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const PLAYWRIGHT_AGENT_FILES = [
+    '.github/agents/playwright-test-planner.agent.md',
+    '.github/agents/playwright-test-generator.agent.md',
+    '.github/agents/playwright-test-healer.agent.md',
+];
 class SkipJob extends Error {
 }
 function snapshotFiles(root, files) {
@@ -30,6 +35,18 @@ function snapshotFiles(root, files) {
         }
     }
     return { files: map };
+}
+function normalizePlaywrightAgentModels(root, model) {
+    for (const relative of PLAYWRIGHT_AGENT_FILES) {
+        const file = path.join(root, relative);
+        if (!fs.existsSync(file)) {
+            throw new AiE2eError(`Required Playwright agent definition is missing: ${relative}. Run \`ai-e2e playwright-init --yes\` first.`);
+        }
+        const source = fs.readFileSync(file, 'utf8');
+        const normalized = /^model:\s*.*$/m.test(source) ? source.replace(/^model:\s*.*$/m, `model: ${model}`) : source;
+        if (normalized !== source)
+            fs.writeFileSync(file, normalized);
+    }
 }
 function lineWriter(log, prefix) {
     let pending = '';
@@ -188,6 +205,8 @@ export async function runJob(options) {
         const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
         const providerOut = lineWriter(log, `[${provider.id}] `);
         const runProvider = async (model) => {
+            if (model)
+                normalizePlaywrightAgentModels(root, model);
             const invocation = provider.buildInvocation({
                 repoRoot: root,
                 instruction,

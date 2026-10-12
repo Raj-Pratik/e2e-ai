@@ -82,6 +82,9 @@ export function createRepo(options: { playwright?: boolean } = {}): TestRepo {
     files['playwright.config.ts'] = "import { defineConfig } from '@playwright/test';\nexport default defineConfig({ testDir: './e2e' });\n";
     files['e2e/home.spec.ts'] = "import { test } from '@playwright/test';\ntest('home', async () => {});\n";
     files['e2e/fixtures/auth.ts'] = 'export const login = async () => {};\n';
+    for (const agent of ['planner', 'generator', 'healer']) {
+      files[`.github/agents/playwright-test-${agent}.agent.md`] = `---\nname: playwright-test-${agent}\nmodel: gpt-6-luna\n---\n`;
+    }
   }
   commit(root, files, 'initial');
   git(root, 'remote', 'add', 'origin', remote);
