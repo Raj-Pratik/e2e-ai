@@ -294,7 +294,7 @@ Unknown keys and wrong types are rejected with the offending path. See [examples
 | `providers.claude.model` | `claude-haiku-5.5` | Primary Claude model |
 | `providers.<id>.fallbackModels` | `[]` | Models tried if the provider exits before completing |
 | `providers.<id>.extraArgs` | `[]` | Extra argv (array, never a shell string). Permission-bypassing flags are rejected unless `allowUnsafeArgs: true` |
-| `providers.<id>.allowedShellCommands` | `[]` | Shell access for the agent; empty = none |
+| `providers.<id>.allowedShellCommands` | `["node", "npm", "npx"]` | Shell access for diagnostics and Playwright; Git mutation and network utilities remain denied |
 | `providers.claude.maxTurns` | `40` | `--max-turns` |
 | `prompt.timeoutSeconds` | `60` | Unanswered prompt = decline |
 | `generation.timeoutSeconds` | `900` | Provider timeout (process group is killed) |

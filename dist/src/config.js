@@ -3,7 +3,15 @@ import path from 'node:path';
 import { AiE2eError, errorMessage } from './errors.js';
 export const CONFIG_FILE = '.ai-e2e.json';
 export function defaultProviderSettings() {
-    return { command: null, model: null, fallbackModels: [], extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
+    return {
+        command: null,
+        model: null,
+        fallbackModels: [],
+        extraArgs: [],
+        allowUnsafeArgs: false,
+        allowedShellCommands: ['node', 'npm', 'npx'],
+        maxTurns: null,
+    };
 }
 export function defaultConfig() {
     return {

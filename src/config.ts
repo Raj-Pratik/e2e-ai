@@ -60,7 +60,15 @@ export interface Config {
 }
 
 export function defaultProviderSettings(): ProviderSettings {
-  return { command: null, model: null, fallbackModels: [], extraArgs: [], allowUnsafeArgs: false, allowedShellCommands: [], maxTurns: null };
+  return {
+    command: null,
+    model: null,
+    fallbackModels: [],
+    extraArgs: [],
+    allowUnsafeArgs: false,
+    allowedShellCommands: ['node', 'npm', 'npx'],
+    maxTurns: null,
+  };
 }
 
 export function defaultConfig(): Config {
