@@ -1,0 +1,118 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { PathFilter } from './exclusions.js';
+import { listFiles } from './git.js';
+export const CONFIG_CANDIDATES = [
+    'playwright.config.ts',
+    'playwright.config.js',
+    'playwright.config.mts',
+    'playwright.config.mjs',
+    'playwright.config.cts',
+    'playwright.config.cjs',
+];
+const TEST_FILE = /\.(spec|test)\.[cm]?[jt]sx?$/;
+const SOURCE_FILE = /\.[cm]?[jt]sx?$/;
+const toPosix = (p) => p.split(path.sep).join('/');
+function readPackageJson(root) {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    }
+    catch {
+        return null;
+    }
+}
+function stringRecord(value) {
+    if (typeof value !== 'object' || value === null)
+        return {};
+    return Object.fromEntries(Object.entries(value).filter((e) => typeof e[1] === 'string'));
+}
+/** Reads testDir without executing the config (configs may run arbitrary code). */
+export function extractTestDir(configSource) {
+    const literal = /\btestDir\s*:\s*(['"`])([^'"`]+)\1/.exec(configSource);
+    if (literal)
+        return literal[2];
+    const joined = /\btestDir\s*:\s*path\.(?:join|resolve)\(\s*__dirname\s*,\s*(['"`])([^'"`]+)\1\s*\)/.exec(configSource);
+    return joined ? joined[2] : null;
+}
+function normalizeRelative(root, base, p) {
+    const rel = toPosix(path.relative(root, path.resolve(base, p)));
+    return rel === '' ? '.' : rel;
+}
+function inferSuffix(testFiles) {
+    const counts = new Map();
+    for (const file of testFiles) {
+        const match = /(\.(?:spec|test)\.[cm]?[jt]sx?)$/.exec(file);
+        if (match)
+            counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '.spec.ts';
+}
+export async function detectPlaywright(root, config) {
+    const configured = config.playwright.configPath;
+    const configPath = configured
+        ? fs.existsSync(path.resolve(root, configured))
+            ? configured
+            : null
+        : (CONFIG_CANDIDATES.find((c) => fs.existsSync(path.join(root, c))) ?? null);
+    const pkg = readPackageJson(root);
+    const deps = { ...stringRecord(pkg?.dependencies), ...stringRecord(pkg?.devDependencies) };
+    const dependency = ['@playwright/test', 'playwright'].find((d) => d in deps) ?? null;
+    const scripts = Object.fromEntries(Object.entries(stringRecord(pkg?.scripts)).filter(([, cmd]) => /playwright/.test(cmd)));
+    let testDir = '.';
+    let testDirSource = 'default';
+    if (config.playwright.testDir) {
+        testDir = normalizeRelative(root, root, config.playwright.testDir);
+        testDirSource = 'settings';
+    }
+    else if (configPath) {
+        const configDir = path.dirname(path.resolve(root, configPath));
+        const fromConfig = extractTestDir(fs.readFileSync(path.resolve(root, configPath), 'utf8'));
+        testDir = normalizeRelative(root, configDir, fromConfig ?? '.');
+        if (fromConfig)
+            testDirSource = 'config';
+    }
+    const outputDir = config.generation.outputDir
+        ? normalizeRelative(root, root, config.generation.outputDir)
+        : testDir === '.'
+            ? 'e2e'
+            : testDir;
+    const cliPath = ['@playwright/test/cli.js', 'playwright/cli.js'].map((p) => path.join(root, 'node_modules', p)).find((p) => fs.existsSync(p)) ?? null;
+    const filter = new PathFilter(config.context.exclude, true);
+    const scanDirs = [...new Set([testDir, outputDir])].filter((d) => !d.startsWith('..'));
+    const files = configPath || dependency ? (await listFiles(root, scanDirs)).filter((f) => !filter.classify(f)) : [];
+    const testFiles = files.filter((f) => TEST_FILE.test(f)).sort();
+    const supportFiles = files.filter((f) => SOURCE_FILE.test(f) && !TEST_FILE.test(f) && !CONFIG_CANDIDATES.includes(path.basename(f))).sort();
+    return {
+        found: Boolean(configPath || dependency),
+        configPath: configPath ? toPosix(configPath) : null,
+        testDir,
+        testDirSource,
+        outputDir,
+        dependency,
+        cliPath,
+        scripts,
+        testFiles,
+        supportFiles,
+        testSuffix: inferSuffix(testFiles),
+    };
+}
+const STOP_WORDS = new Set(['src', 'lib', 'app', 'index', 'main', 'test', 'tests', 'spec', 'e2e', 'components', 'component', 'utils', 'util', 'helpers', 'local', 'modules', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'css', 'scss', 'html', 'json']);
+export function pathTokens(filePath) {
+    return new Set(filePath
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length >= 3 && !STOP_WORDS.has(t)));
+}
+/** Ranks files by how many path tokens they share with the changed files. */
+export function rankRelated(candidates, changedPaths, limit) {
+    const changed = new Set(changedPaths.flatMap((p) => [...pathTokens(p)]));
+    return candidates
+        .map((file) => ({ file, score: [...pathTokens(file)].filter((t) => changed.has(t)).length }))
+        .filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score || a.file.localeCompare(b.file))
+        .slice(0, limit)
+        .map((c) => c.file);
+}
+export function isWithin(dir, file) {
+    return dir === '.' || file === dir || file.startsWith(`${dir}/`);
+}
