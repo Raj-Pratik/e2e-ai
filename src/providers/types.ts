@@ -14,6 +14,7 @@ export interface ProviderRequest {
   mcp: McpServerSpec | null;
   /** Names (never values) of environment variables that look secret. */
   secretEnvNames: string[];
+  interactive?: boolean;
 }
 
 export interface Invocation {

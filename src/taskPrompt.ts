@@ -68,11 +68,22 @@ export function buildTask(input: TaskInput): string {
   const out = setup.outputDir;
   const changedPaths = changeSet.files.map((f) => f.path);
 
-  budget.add(`# Task: generate Playwright E2E tests for outgoing changes
+  budget.add(`# Task: plan, generate, validate and heal Playwright E2E tests for outgoing changes
 
 You are generating end-to-end tests for code that a developer is pushing. Work only inside this repository.
 
 ## Rules (mandatory)
+- First act as a planner. Inspect the outgoing commits and classify the change as product behaviour, test-only,
+  documentation, Docker/Kubernetes, CI/CD, package metadata, generated output, or another non-product change.
+- If no meaningful product behaviour needs browser coverage, explain why E2E coverage is unnecessary and ask the user
+  to confirm skipping. Do not create tests until the user confirms the decision.
+- For product changes, explain the user-visible flow, risks, required scenarios, fixtures and shared helpers. Ask the
+  user focused questions about the feature's motivation, expected behaviour, roles/data, edge cases and environment
+  before finalising the plan. Do not invent answers.
+- Present the plan and wait for explicit user approval. Revise it when the user gives feedback.
+- When repository planner/generator/healer agent definitions exist (for example under \`.github/agents/\`), follow
+  those definitions and use the planner before the generator and the healer after any failed Playwright run.
+- Only after approval, use the Playwright MCP agent to explore the application and implement the plan.
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
   If an existing test or helper must change, describe the proposed patch in your final answer instead of editing it.
@@ -84,6 +95,11 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
   rely on web-first assertions and auto-waiting. Cover loading, error and important edge cases where relevant.
 - Reuse existing fixtures, page objects, auth setup and helpers listed below; do not duplicate existing coverage.
 - Keep tests deterministic and independent. Mark tests that need unavailable data or environments with \`test.skip\` and a reason.
+- Split independent scenarios into separate test files where practical, and put reusable setup/actions/assertions in
+  existing common helpers or a new shared helper under the E2E test directory.
+- Run every newly generated test with the repository's Playwright command. Read the Playwright output, traces and
+  reporter metrics. If a test fails, diagnose the failure and patch only the generated tests/helpers, then rerun it.
+  Repeat the generate/run/heal cycle until the new tests pass or a concrete environment blocker is reported.
 
 ## Final answer
 Reply with: (1) the list of files you created, (2) what each test covers, (3) any proposed patches to existing files,

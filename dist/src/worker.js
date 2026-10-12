@@ -3,11 +3,11 @@ import path from 'node:path';
 import { analyzeOutgoing } from './changes.js';
 import { loadConfig, stateDirPath } from './config.js';
 import { AiE2eError, errorMessage } from './errors.js';
-import { listFiles, statusSnapshot } from './git.js';
+import { git, listFiles, statusSnapshot } from './git.js';
 import { JobStore } from './jobs.js';
 import { createLogger } from './log.js';
 import { detectPlaywright, isWithin } from './playwright.js';
-import { resolveCommand, runProcess } from './proc.js';
+import { hasInteractiveTerminal, resolveCommand, runProcess } from './proc.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, secretEnvNames } from './providers/index.js';
 import { redact } from './redact.js';
 import { parsePrePushInput } from './refs.js';
@@ -121,7 +121,7 @@ async function runGeneratedTests(root, config, setup, specs, log, signal) {
 function summarize(job, setup) {
     if (!job.generatedFiles.length)
         return 'No new test files were generated.';
-    const lines = [`Generated ${job.generatedFiles.length} file(s) (uncommitted, review before committing):`, ...job.generatedFiles.map((f) => `  - ${f}`)];
+    const lines = [`Generated ${job.generatedFiles.length} file(s):`, ...job.generatedFiles.map((f) => `  - ${f}`)];
     const specs = job.generatedFiles.filter((f) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(f));
     if (specs.length)
         lines.push(`Run them with: npx playwright test ${specs.join(' ')}`);
@@ -145,6 +145,7 @@ export async function runJob(options) {
     let job = store.update(jobId, { status: 'running', pid: process.pid, startedAt: new Date().toISOString() });
     log(`Job ${jobId} started (pid ${process.pid}, provider ${job.provider}, repo ${root}).`);
     try {
+        const interactive = config.generation.interactive && hasInteractiveTerminal();
         const setup = await detectPlaywright(root, config);
         if (!setup.found) {
             throw new SkipJob('No Playwright setup detected (no playwright.config.* and no @playwright/test dependency). ' +
@@ -178,7 +179,14 @@ export async function runJob(options) {
         const before = snapshotFiles(root, listedBefore);
         const statusBefore = await statusSnapshot(root);
         const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
-        const invocation = provider.buildInvocation({ repoRoot: root, instruction, settings, mcp: mcp.spec, secretEnvNames: secretEnvNames(process.env) });
+        const invocation = provider.buildInvocation({
+            repoRoot: root,
+            instruction,
+            settings,
+            mcp: mcp.spec,
+            secretEnvNames: secretEnvNames(process.env),
+            interactive,
+        });
         log(`Invoking ${invocation.command} (timeout ${config.generation.timeoutSeconds}s).`);
         const providerOut = lineWriter(log, `[${provider.id}] `);
         const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
@@ -187,6 +195,7 @@ export async function runJob(options) {
             maxOutputBytes: config.generation.maxOutputBytes,
             killProcessGroup: true,
             onOutput: (chunk) => providerOut.write(chunk),
+            interactive,
             ...(signal ? { signal } : {}),
         });
         providerOut.flush();
@@ -217,8 +226,27 @@ export async function runJob(options) {
         }
         const specs = generatedFiles.filter((f) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(f));
         let testRun;
-        if (config.playwright.runGeneratedTests && specs.length) {
+        if ((config.playwright.runGeneratedTests || interactive) && specs.length) {
             testRun = (await runGeneratedTests(root, config, setup, specs, log, signal)) ?? undefined;
+            if (testRun)
+                job = store.update(jobId, { testRun });
+            if (!testRun?.passed) {
+                throw new AiE2eError('Generated Playwright tests did not pass; the push is blocked.');
+            }
+            if (config.generation.commitGeneratedTests) {
+                await git(root, ['add', '--', ...generatedFiles]);
+                await git(root, [
+                    'commit',
+                    '--only',
+                    '-m',
+                    'test: add generated Playwright coverage',
+                    '-m',
+                    'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
+                    '--',
+                    ...generatedFiles,
+                ]);
+                log('Committed generated Playwright tests after a passing run.');
+            }
         }
         const summary = summarize({ generatedFiles, proposedPatches: restored.patches, ...(testRun ? { testRun } : {}) }, setup);
         log(summary);

@@ -10,9 +10,11 @@ ai-e2e: started background job 20261012-151203-a1b2c3. Check progress with `ai-e
 ...push continues immediately...
 ```
 
-**It is never a push gate.** Declining, pressing Enter, having no terminal, a missing AI CLI, a broken config, a failed
-worker launch, provider errors and failing generated tests all leave the push unaffected. Your own hook logic still runs
-and keeps its own exit semantics.
+**An accepted generation is a push gate.** Declining or pressing Enter allows the push, but after accepting, ai-e2e
+keeps the terminal, lets the selected provider ask feature questions and obtain plan approval, generates the tests,
+runs the new Playwright specs, heals failures, and blocks the push unless the workflow passes. Generated tests are
+committed automatically after a passing run. Explicitly skipped pushes and pushes without a controlling terminal are
+not generated.
 
 ## How it works
 
@@ -20,9 +22,9 @@ and keeps its own exit semantics.
 flowchart LR
   A[git push] --> B[pre-push hook block<br/>thin shell]
   B -->|refs on stdin| C[ai-e2e hook pre-push]
-  C -->|analyze outgoing commits| D{prompt y/N<br/>via /dev/tty}
+  C -->|check explicit skip controls| D{prompt y/N<br/>via /dev/tty}
   D -->|no / Enter / no TTY / timeout| E[exit 0]
-  D -->|yes| F[create job + detached worker]
+  D -->|yes| F[analyze outgoing changes,<br/>create job + detached worker]
   F --> E
   F -.-> G[worker: analyze diffs, build task.md,<br/>run AI CLI, verify output,<br/>optional test run]
   G -.-> H[.ai-e2e/jobs/&lt;id&gt;/<br/>job.json · worker.log · task.md]
@@ -98,6 +100,22 @@ ai-e2e init
      husky v4) or non-shell hooks, and prints integration instructions instead (`--force` overrides).
 4. Reports Playwright detection and provider availability.
 
+The pre-push hook asks for confirmation before checking whether the push contains
+relevant changes. It does not ask only when generation is explicitly disabled
+(`enabled: false` or `AI_E2E_SKIP=1`), when `AI_E2E_ASSUME=yes|no` supplies an
+explicit answer, or when the push contains no non-delete refs. A terminal is
+required for the interactive question; pushes from environments without a
+controlling terminal are reported as `no interactive terminal` and cannot be
+prompted.
+
+On an accepted push, the selected Copilot or Claude CLI runs in the invoking
+terminal. Its task requires a planning phase, user questions and explicit plan
+approval, Playwright MCP exploration, focused test generation, execution of new
+specs, and a generator/healer retry loop. Product changes should result in
+separate scenario specs and shared helpers; documentation, package metadata,
+Docker/Kubernetes, CI and other non-product changes may be explicitly classified
+as not requiring E2E coverage.
+
 The hook first resolves the installed `ai-e2e` command from `PATH`, so the
 same hook can be shared by every developer. If the command is unavailable, it
 falls back to the CLI path used during installation and prints one line before
@@ -133,7 +151,7 @@ ai-e2e help
 Examples:
 
 ```sh
-ai-e2e generate                         # upstream..HEAD in the background
+ai-e2e generate                         # upstream..HEAD, interactively and blocking
 ai-e2e generate --base origin/develop --foreground
 ai-e2e status && ai-e2e logs --tail 50
 ai-e2e config set provider claude
@@ -163,7 +181,9 @@ Unknown keys and wrong types are rejected with the offending path. See [examples
 | `generation.outputDir` | test dir | Where new tests go |
 | `generation.allowModifyExistingTests` | `false` | If false, agent edits to existing tests are reverted and saved as patches |
 | `playwright.configPath` / `testDir` | auto | Override detection |
-| `playwright.runGeneratedTests` | `false` | Run only newly generated specs after generation |
+| `playwright.runGeneratedTests` | `false` | Optional legacy switch; interactive workflows always run new specs |
+| `generation.interactive` | `true` | Keep the selected provider in the terminal for questions and approval |
+| `generation.commitGeneratedTests` | `true` | Commit generated tests after they pass |
 | `playwright.testCommand` | local Playwright CLI | argv array; generated spec paths are appended |
 | `mcp.playwright.enabled` | `false` | Offer Playwright MCP to the agent |
 | `mcp.playwright.command` / `args` | `npx @playwright/mcp@latest` | MCP server command |
@@ -242,14 +262,13 @@ production systems, but this is an instruction to the agent, not an enforcement 
 ```
 
 Statuses: `queued`, `running`, `succeeded`, `failed`, `skipped`, `crashed` (worker died: detected via PID liveness, or
-no start within 2 minutes). Generated files are new, untracked and never staged, committed or pushed. After the run the
-worker:
+no start within 2 minutes). Generated files are committed only after all new specs pass. After the run the worker:
 
 - restores any pre-existing test/helper file the agent modified or deleted (unless `allowModifyExistingTests`) and
   stores the agent's version plus a patch under `proposed/`;
 - warns if files outside the test directories changed or the Git index changed (it does not revert those, to avoid
   clobbering edits you made concurrently);
-- optionally runs only the new specs; failures are recorded, not escalated.
+- runs only the new specs in an interactive workflow; failures mark the job failed and block the push.
 
 ## Security and privacy
 
@@ -265,7 +284,7 @@ worker:
   (no path traversal); config keys like `__proto__` are rejected.
 - The agent is denied shell access by default, and permission-bypassing provider flags are refused unless explicitly
   allowed. Hook-specific `GIT_*` variables are stripped from the worker; `AI_E2E_WORKER=1` prevents recursive prompts.
-- Nothing is committed, staged, amended or pushed by ai-e2e.
+- ai-e2e commits only the generated files after a passing run; it never amends, pushes, or stages unrelated files.
 
 ## Platform notes
 

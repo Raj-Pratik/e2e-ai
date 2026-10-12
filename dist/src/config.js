@@ -11,7 +11,14 @@ export function defaultConfig() {
         provider: 'copilot',
         providers: { copilot: defaultProviderSettings(), claude: defaultProviderSettings() },
         prompt: { timeoutSeconds: 60 },
-        generation: { timeoutSeconds: 900, maxOutputBytes: 1024 * 1024, allowModifyExistingTests: false, outputDir: null },
+        generation: {
+            timeoutSeconds: 900,
+            maxOutputBytes: 1024 * 1024,
+            allowModifyExistingTests: false,
+            outputDir: null,
+            interactive: true,
+            commitGeneratedTests: true,
+        },
         playwright: { configPath: null, testDir: null, runGeneratedTests: false, testCommand: null, testTimeoutSeconds: 600 },
         mcp: { playwright: { enabled: false, command: 'npx', args: ['@playwright/mcp@latest'], baseUrl: null } },
         context: {
@@ -102,6 +109,8 @@ const schema = obj({
         maxOutputBytes: int(1024, 64 * 1024 * 1024),
         allowModifyExistingTests: bool,
         outputDir: nullable(str),
+        interactive: bool,
+        commitGeneratedTests: bool,
     }),
     playwright: obj({
         configPath: nullable(str),

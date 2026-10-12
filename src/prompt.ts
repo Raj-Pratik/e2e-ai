@@ -34,6 +34,32 @@ export function askYesNo(question: string, io: Pick<PromptIO, 'input' | 'output'
   });
 }
 
+export async function askChoice(
+  question: string,
+  choices: readonly string[],
+  io: Pick<PromptIO, 'input' | 'output'>,
+  timeoutMs: number,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: io.input, output: io.output, terminal: false });
+    let done = false;
+    const finish = (choice: string | null): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      rl.close();
+      resolve(choice);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    rl.once('line', (line) => {
+      const index = Number.parseInt(line.trim(), 10) - 1;
+      finish(Number.isInteger(index) && index >= 0 && index < choices.length ? choices[index]! : null);
+    });
+    rl.once('close', () => finish(null));
+    io.output.write(`${question}\n${choices.map((choice, index) => `  ${index + 1}) ${choice}`).join('\n')}\n> `);
+  });
+}
+
 /**
  * Opens the controlling terminal directly: in a pre-push hook stdin carries the
  * ref list. Returns null when no interactive terminal is attached.

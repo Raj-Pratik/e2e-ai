@@ -13,6 +13,7 @@ export interface RunOptions {
   /** Run in its own process group so timeouts also stop grandchildren (POSIX only). */
   killProcessGroup?: boolean;
   onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
+  interactive?: boolean;
 }
 
 export interface RunResult {
@@ -28,6 +29,16 @@ export interface RunResult {
 
 const DEFAULT_MAX_OUTPUT = 10 * 1024 * 1024;
 const KILL_GRACE_MS = 5000;
+
+export function hasInteractiveTerminal(): boolean {
+  try {
+    const fd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 class TailBuffer {
   private chunks: string[] = [];
@@ -68,6 +79,7 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     let timer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     let child: ChildProcess | undefined;
+    let interactiveFd: number | undefined;
 
     const onAbort = (): void => {
       aborted = true;
@@ -80,6 +92,13 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       if (timer) clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       options.signal?.removeEventListener('abort', onAbort);
+      if (interactiveFd !== undefined) {
+        try {
+          fs.closeSync(interactiveFd);
+        } catch {
+          // The child may already have closed the descriptor.
+        }
+      }
       const result: RunResult = {
         exitCode,
         signal,
@@ -110,13 +129,16 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     }
 
     try {
+      if (options.interactive) {
+        interactiveFd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
+      }
       child = spawn(command, [...args], {
         cwd: options.cwd,
         env: options.env ?? process.env,
         shell: false,
         windowsHide: true,
         detached: useGroup,
-        stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        stdio: [options.interactive ? interactiveFd! : options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
       finish(null, null, error instanceof Error ? error : new Error(String(error)));
@@ -144,6 +166,10 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       stderr.push(chunk);
       options.onOutput?.(chunk, 'stderr');
     });
+    if (options.interactive) {
+      child.stdout?.on('data', (chunk: string) => process.stdout.write(chunk));
+      child.stderr?.on('data', (chunk: string) => process.stderr.write(chunk));
+    }
     child.on('error', (error) => finish(null, null, error));
     child.on('close', (code, signal) => finish(code, signal));
 

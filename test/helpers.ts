@@ -94,7 +94,13 @@ export function writeConfig(root: string, config: Record<string, unknown>): void
 }
 
 export function fakeProviderConfig(extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { provider: 'copilot', providers: { copilot: { command: FAKE_PROVIDER } }, prompt: { timeoutSeconds: 2 }, ...extra };
+  return {
+    provider: 'copilot',
+    providers: { copilot: { command: FAKE_PROVIDER } },
+    prompt: { timeoutSeconds: 2 },
+    generation: { interactive: false, commitGeneratedTests: false },
+    ...extra,
+  };
 }
 
 export interface CapturedIO extends CliIO {

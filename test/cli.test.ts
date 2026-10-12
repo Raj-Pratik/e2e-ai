@@ -126,13 +126,32 @@ describe('pre-push hook handler', () => {
     });
     assert.equal(outcome, 'declined');
     assert.equal(launched, false);
-    assert.match(out, /1 outgoing commit\(s\), \d+ changed file\(s\)/);
+    assert.match(out, /ai-e2e: skipped\./);
   });
 
   it('declines when no terminal is available', async () => {
     const { root, stdin } = await pushInput();
     const outcome = await runPrePushHook({ cwd: root, remote: 'origin', stdin, env: testEnv(), write: () => undefined, openTty: () => null });
     assert.equal(outcome, 'no-terminal');
+  });
+
+  it('prompts before deciding that there are no relevant changes', async () => {
+    const { root, stdin } = await pushInput();
+    writeConfig(root, { context: { exclude: ['**/*'] } });
+    let prompted = false;
+    const outcome = await runPrePushHook({
+      cwd: root,
+      remote: 'origin',
+      stdin,
+      env: testEnv(),
+      write: () => undefined,
+      openTty: () => {
+        prompted = true;
+        return fakeTty('y\n')();
+      },
+    });
+    assert.equal(outcome, 'no-relevant-changes');
+    assert.equal(prompted, true);
   });
 
   it('launches a worker on y without waiting for it', async () => {
@@ -173,8 +192,8 @@ describe('pre-push hook handler', () => {
     assert.equal(outcome, 'nothing-to-push');
   });
 
-  it('hook command always exits 0', async () => {
+  it('hook command blocks on malformed input', async () => {
     const io = captureIO(tmpDir(), testEnv(), 'not valid input');
-    assert.equal(await run(['hook', 'pre-push', 'origin', 'url'], io), 0);
+    assert.equal(await run(['hook', 'pre-push', 'origin', 'url'], io), 1);
   });
 });

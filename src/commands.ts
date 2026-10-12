@@ -21,6 +21,7 @@ import { isValidJobId, JobStore, type JobRecord } from './jobs.js';
 import { CLI_PATH, startJob } from './launcher.js';
 import { createLogger } from './log.js';
 import { detectPlaywright } from './playwright.js';
+import { askChoice, openTerminal } from './prompt.js';
 import { resolveCommand, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
 import type { PushRef } from './refs.js';
@@ -50,13 +51,13 @@ Commands:
   config [show|get <key>|set <key> <value>|validate|path]
                                       Display or update configuration
   providers [--json]                  List AI providers and whether they are available
-  playwright-init [--yes]             Explain (or, with --yes, run) Playwright initialisation
+  playwright-init [--yes]             Explain (or, with --yes, run) Playwright + MCP initialisation
   uninstall                           Remove the ai-e2e block from the pre-push hook
   help                                Show this help
 
 Environment:
   AI_E2E_SKIP=1          Skip the hook entirely for one push
-  AI_E2E_ASSUME=yes|no   Answer the push prompt non-interactively (default: ask; no terminal = no)
+  AI_E2E_ASSUME=yes|no  Answer the push prompt non-interactively (explicit opt-in; default: ask)
 `;
 
 type Options = NonNullable<ParseArgsConfig['options']>;
@@ -99,7 +100,19 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
   if (fs.existsSync(configFile)) {
     io.out(`Config: ${CONFIG_FILE} exists, keeping it.\n`);
   } else {
-    writeConfig(configFile, starterConfig());
+    const initial = starterConfig();
+    const tty = openTerminal();
+    if (tty) {
+      try {
+        const selected = await askChoice('Which AI provider should ai-e2e use by default?', ['GitHub Copilot CLI', 'Claude Code CLI'], tty, 60_000);
+        if (selected === 'Claude Code CLI') initial.provider = 'claude';
+      } finally {
+        tty.close();
+      }
+    } else {
+      io.out('No interactive terminal; defaulting to GitHub Copilot CLI. Use `ai-e2e config set provider claude` to switch.\n');
+    }
+    writeConfig(configFile, initial);
     io.out(`Config: created ${CONFIG_FILE} (commit it to share settings).\n`);
   }
   const { config } = loadConfig(root);
@@ -113,7 +126,6 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
       'outside-repo': `Ignore: state directory ${stateDir} is outside the repository.\n`,
     }[ignored],
   );
-
   if (values['no-hook']) {
     io.out('Hook: skipped (--no-hook).\n');
   } else {
@@ -140,6 +152,9 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
       ? `Playwright: config ${setup.configPath ?? '(none)'}, tests in ${setup.testDir}, new tests go to ${setup.outputDir}.\n`
       : 'Playwright: not detected. Run `ai-e2e playwright-init` for setup guidance; generation will be skipped until then.\n',
   );
+  if (setup.found) {
+    io.out('Playwright MCP is configured for the selected provider. Run `ai-e2e playwright-init --yes` to install it locally.\n');
+  }
   const provider = getProvider(config.provider);
   const availability = await detectProvider(provider, config.providers[provider.id] ?? config.providers.copilot!, root);
   io.out(`Provider: ${provider.displayName} — ${availability.available ? `available (${availability.version ?? 'unknown version'})` : availability.reason}\n`);
@@ -220,7 +235,7 @@ async function cmdGenerate(args: string[], io: CliIO): Promise<number> {
     source: 'manual',
     provider: providerId,
     force: Boolean(values.force),
-    background: !values.foreground,
+    background: false,
   });
   switch (result.kind) {
     case 'duplicate':
@@ -357,26 +372,44 @@ async function cmdProviders(args: string[], io: CliIO): Promise<number> {
 async function cmdPlaywrightInit(args: string[], io: CliIO): Promise<number> {
   const { values } = parse(args, { yes: { type: 'boolean' } });
   const root = await findRepoRoot(io.cwd);
-  const { config } = loadConfig(root);
+  const loaded = loadConfig(root);
+  const { config } = loaded;
   const setup = await detectPlaywright(root, config);
   if (setup.found) {
-    io.out(`Playwright is already set up (${setup.configPath ?? setup.dependency}). Nothing to do.\n`);
-    return 0;
-  }
-  const command = ['npm', 'init', 'playwright@latest'];
-  if (!values.yes) {
-    io.out(
-      'No Playwright setup found. ai-e2e never installs Playwright implicitly.\n' +
-        `To initialise it, run \`${command.join(' ')}\` yourself, or re-run \`ai-e2e playwright-init --yes\` to run it now.\n` +
-        'This modifies package.json, adds dependencies and creates a config file.\n',
-    );
-    return 0;
+    io.out(`Playwright is already set up (${setup.configPath ?? setup.dependency}).\n`);
+    if (!values.yes) {
+      io.out('Re-run with --yes to install and enable Playwright MCP.\n');
+      return 0;
+    }
+  } else {
+    const command = ['npm', 'init', 'playwright@latest'];
+    if (!values.yes) {
+      io.out(
+        'No Playwright setup found. ai-e2e never installs Playwright implicitly.\n' +
+          `To initialise it, run \`${command.join(' ')}\` yourself, or re-run \`ai-e2e playwright-init --yes\` to run it now.\n` +
+          'This modifies package.json, adds dependencies and creates a config file.\n',
+      );
+      return 0;
+    }
+    const npm = resolveCommand('npm', root);
+    if (!npm) throw new AiE2eError('npm was not found on PATH.');
+    io.out(`Running: ${command.join(' ')}\n`);
+    const result = await runProcess(npm, command.slice(1), { cwd: root, interactive: true, onOutput: (chunk) => io.out(chunk) });
+    if (result.exitCode !== 0) return 1;
   }
   const npm = resolveCommand('npm', root);
   if (!npm) throw new AiE2eError('npm was not found on PATH.');
-  io.out(`Running: ${command.join(' ')}\n`);
-  const result = await runProcess(npm, command.slice(1), { cwd: root, onOutput: (chunk) => io.out(chunk) });
-  return result.exitCode === 0 ? 0 : 1;
+  io.out('Installing Playwright MCP: npm install --save-dev @playwright/mcp\n');
+  const mcpResult = await runProcess(npm, ['install', '--save-dev', '@playwright/mcp'], {
+    cwd: root,
+    interactive: true,
+    onOutput: (chunk) => io.out(chunk),
+  });
+  if (mcpResult.exitCode !== 0) return 1;
+  const next = setConfigValue(loaded.raw, 'mcp.playwright.enabled', true);
+  writeConfig(loaded.path, next);
+  io.out('Playwright MCP installed and enabled in .ai-e2e.json.\n');
+  return 0;
 }
 
 async function cmdUninstall(args: string[], io: CliIO): Promise<number> {
@@ -407,8 +440,8 @@ async function cmdHook(args: string[], io: CliIO): Promise<number> {
   } catch {
     // treated as nothing to push
   }
-  await runPrePushHook({ cwd: io.cwd, remote: remote ?? null, stdin, env: io.env, write: io.err });
-  return 0;
+  const outcome = await runPrePushHook({ cwd: io.cwd, remote: remote ?? null, stdin, env: io.env, write: io.err });
+  return outcome === 'generation-failed' || outcome === 'error' || outcome === 'launch-failed' ? 1 : 0;
 }
 
 async function cmdWorker(args: string[], io: CliIO): Promise<number> {
@@ -465,8 +498,8 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     return await handler(rest, io);
   } catch (error) {
     if (command === 'hook') {
-      io.err(`ai-e2e: skipped (${errorMessage(error)}). Push continues.\n`);
-      return 0;
+      io.err(`ai-e2e: failed (${errorMessage(error)}). Push is blocked.\n`);
+      return 1;
     }
     io.err(`ai-e2e: ${errorMessage(error)}\n`);
     return error instanceof UsageError ? 2 : 1;

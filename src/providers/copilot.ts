@@ -43,7 +43,7 @@ export const copilotProvider: AiProvider = {
 
   buildInvocation(request: ProviderRequest): Invocation {
     const { settings } = request;
-    const args = ['-p', request.instruction, '--silent', '--no-ask-user', '--allow-all-tools'];
+    const args = ['-p', request.instruction, ...(request.interactive ? [] : ['--silent', '--no-ask-user']), '--allow-all-tools'];
 
     const allowedShell = new Set(settings.allowedShellCommands.map((c) => c.trim()));
     if (allowedShell.size === 0) {

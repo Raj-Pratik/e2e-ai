@@ -27,7 +27,7 @@ export const claudeProvider: AiProvider = {
       'text',
       '--permission-mode',
       'acceptEdits',
-      '--no-session-persistence',
+      ...(request.interactive ? [] : ['--no-session-persistence']),
       '--max-turns',
       String(settings.maxTurns ?? DEFAULT_MAX_TURNS),
     ];

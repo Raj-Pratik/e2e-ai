@@ -134,12 +134,12 @@ describe('background worker job execution', () => {
     assert.match(fs.readFileSync(taskCopy, 'utf8'), /Only navigate to http:\/\/localhost:4000/);
   });
 
-  it('records failing generated tests without failing the job', async () => {
+  it('blocks the job when generated tests fail', async () => {
     const config = fakeProviderConfig({ playwright: { runGeneratedTests: true, testCommand: [process.execPath, '-e', 'process.exit(1)'] } });
     const { root, jobId } = await prepare({ config });
     const job = await runJob({ repoRoot: root, jobId, log });
-    assert.equal(job.status, 'succeeded', job.error);
+    assert.equal(job.status, 'failed');
     assert.equal(job.testRun?.passed, false);
-    assert.match(job.summary ?? '', /Test run: failed/);
+    assert.match(job.error ?? '', /did not pass/);
   });
 });
