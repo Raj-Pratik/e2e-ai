@@ -8,15 +8,17 @@ Inspect the repository first and make only the setup changes required:
    directory. Preserve the project's existing conventions.
 2. Install the Playwright agent definitions with:
    npx playwright init-agents --loop=vscode
-3. Configure the planner, generator, and healer agents so they are available to the coding CLI.
-   Set the model metadata for all three agents to a model that exists in the current CLI catalog:
+3. Configure the planner and generator agents so they are available to the coding CLI.
+   Keep the generated healer definition if the Playwright installer creates one, but the runtime
+   uses a normal coding-CLI repair phase after failures. Set model metadata for generated agents
+   to models that exist in the current CLI catalog:
    - Copilot: primary \`gpt-6-luna\`, fallback \`gpt-5.6-terra\`.
    - Claude: primary \`claude-haiku-5.5\`, fallback \`claude-sonnet-5.5\`.
    Remove obsolete model values such as \`claude-sonnet-4.6\`; never leave an unavailable model in an agent file.
 4. ${providerId === 'copilot' ? 'If the Copilot skills plugin is not already installed, run:' : 'If the repository has coding-agent skills configured, load them; do not install a Copilot plugin when Copilot is not the selected provider.'}
 ${providerId === 'copilot' ? `   copilot plugin marketplace add mattpocock/skills
    copilot plugin install mattpocock-skills@mattpocock` : ''}
-   Use the available skills when deciding how to plan, generate, and heal E2E tests.
+   Use the available skills when deciding how to plan, generate, diagnose, and repair E2E tests.
 5. Verify the resulting Playwright configuration and agent files. Do not generate feature tests
    during this setup task.
 

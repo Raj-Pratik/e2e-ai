@@ -422,7 +422,7 @@ async function cmdPlaywrightInit(args, io) {
     if (setup.found) {
         io.out(`Playwright is already set up (${setup.configPath ?? setup.dependency}).\n`);
         if (!values.yes) {
-            io.out('Re-run with --yes to let the selected coding CLI verify Playwright and install its planner, generator and healer agents.\n');
+            io.out('Re-run with --yes to let the selected coding CLI verify Playwright and install its planner and generator agents.\n');
             return 0;
         }
     }
@@ -461,7 +461,7 @@ async function cmdPlaywrightInit(args, io) {
     const after = await detectPlaywright(root, config);
     if (!after.found)
         throw new AiE2eError('The coding CLI completed without creating a detectable Playwright setup.');
-    io.out(`Playwright setup verified (${after.configPath ?? after.dependency}); planner, generator and healer setup was delegated to ${provider.displayName}.\n`);
+    io.out(`Playwright setup verified (${after.configPath ?? after.dependency}); planner and generator setup was delegated to ${provider.displayName}.\n`);
     return 0;
 }
 async function cmdUninstall(args, io) {

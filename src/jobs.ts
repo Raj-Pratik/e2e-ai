@@ -10,6 +10,7 @@ export interface TestRunResult {
   exitCode: number | null;
   passed: boolean;
   timedOut: boolean;
+  failureOutput?: string;
 }
 
 export interface JobRecord {

@@ -165,9 +165,11 @@ Kubernetes, CI, or another non-product change, the planner can explain why E2E
 coverage is unnecessary and ask for confirmation to skip it.
 
 Test execution is enforced by the worker, not left to the provider prompt: after
-each failed Playwright run it invokes `playwright-test-healer`, applies only
-generated-test/helper fixes, and reruns the exact specs. It makes up to three
-healing attempts; if the tests still fail, the push remains blocked.
+each failed Playwright run it starts a fresh coding-CLI repair phase with the
+exact command, failure report, and artifact paths. The repair agent decides
+what to inspect or rerun, applies only generated-test/helper fixes, and the
+worker reruns the exact specs. It makes up to three repair attempts; if the
+tests still fail, the push remains blocked.
 
 When generated tests pass, ai-e2e commits them during the hook, allows the
 original push to finish, verifies that the feature commit reached the remote,
@@ -181,7 +183,7 @@ ai-e2e push
 # or: ai-e2e push origin experiment
 ```
 
-It runs the planner/approval/generator/healer workflow, verifies the generated
+It runs the planner/approval/generator/repair workflow, verifies the generated
 specs with Playwright, commits them, and only then runs the final Git push with
 the hook bypassed. This avoids recursively pushing from inside a pre-push hook.
 
@@ -224,11 +226,12 @@ controlling terminal are reported as `no interactive terminal` and cannot be
 prompted.
 
 On an accepted push, the selected Copilot or Claude CLI runs in the invoking
-terminal. Its task uses the Playwright planner, generator and healer agents.
+terminal. Its task uses the Playwright planner and generator agents, with the
+same coding CLI handling repair phases after failed runs.
 Questions are limited to compact multiple-choice questions when an answer
 changes coverage; clear flows proceed without questions. The agent generates
 separate scenario specs and shared helpers, runs the new specs, and repeats the
-generator/healer loop until they pass or a concrete environment blocker is
+generator/repair loop until they pass or a concrete environment blocker is
 reported. Documentation, package metadata, Docker/Kubernetes, CI and other
 non-product changes are classified without unnecessary questioning.
 
@@ -358,7 +361,7 @@ Settings for the new id work automatically under `providers.<id>`.
 ## Playwright agents
 
 `ai-e2e playwright-init --yes` delegates repository setup to the selected coding CLI. The setup agent verifies or
-creates Playwright, runs `npx playwright init-agents --loop=vscode`, and makes the planner, generator and healer
+creates Playwright, runs `npx playwright init-agents --loop=vscode`, and makes the planner and generator
 agents available to the coding CLI. The generation task uses those agents and does not install or configure Playwright
 MCP.
 

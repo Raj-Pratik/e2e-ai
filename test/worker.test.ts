@@ -143,7 +143,7 @@ describe('background worker job execution', () => {
     assert.match(job.error ?? '', /did not pass/);
   });
 
-  it('invokes the healer and reruns tests until they pass', async () => {
+  it('invokes a repair agent and reruns tests until they pass', async () => {
     const marker = path.join(tmpDir(), 'healed');
     const command = [
       process.execPath,
@@ -155,6 +155,6 @@ describe('background worker job execution', () => {
     const job = await runJob({ repoRoot: root, jobId, log });
     assert.equal(job.status, 'succeeded', job.error);
     assert.equal(job.testRun?.passed, true);
-    assert.ok(logs.some((line) => /playwright-test-healer \(attempt 1\/3\)/.test(line)));
+    assert.ok(logs.some((line) => /coding CLI repair phase \(attempt 1\/3\)/.test(line)));
   });
 });

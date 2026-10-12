@@ -100,12 +100,14 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
     reason: use the repository root, task specification, plan artifact, source search and existing tests directly.
     Never invent selectors or claim a browser observation that did not occur.
   - After approval, invoke \`playwright-test-generator\` to create the approved tests. Run them with the repository's
-    Playwright command. After every failed run, invoke \`playwright-test-healer\`, apply only its generated-test/helper
-    fixes, and rerun the tests. Repeat until the tests pass or a concrete environment blocker is reported.
-  - If any of the three named agents is unavailable, stop and report the setup problem instead of silently writing
-    tests without the required planner/generator/healer workflow.
+    Playwright command. After every failed run, the outer worker starts a fresh coding-CLI repair phase with the exact
+    failed command, reporter output and artifact paths. The repair agent decides the diagnostic and rerun commands,
+    asks the user only when authentication or environment input is genuinely required, applies only generated-test/helper
+    fixes, and exits; the worker reruns the tests. Repeat until the tests pass or a concrete environment blocker is reported.
+  - If the planner or generator agent is unavailable, stop and report the setup problem instead of silently writing
+    tests without the required planner/generator workflow.
   - Before finishing, explicitly report whether the user approved the plan, which generator agent ran, which Playwright
-    command actually ran, and whether the healer was needed. Missing evidence means the workflow is incomplete.
+    command actually ran, and how many repair phases were needed. Missing evidence means the workflow is incomplete.
   - Do not use Playwright MCP. Explore through the Playwright agents and repository source instead.
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
@@ -144,7 +146,7 @@ assumptions as if they were completion criteria.
 `);
 
   budget.add(`## Playwright agents
-Use \`playwright-test-planner\`, \`playwright-test-generator\`, and \`playwright-test-healer\`. They were installed by
+Use \`playwright-test-planner\` and \`playwright-test-generator\`. They were installed by
 \`npx playwright init-agents --loop=vscode\`. Do not navigate to \`file:\` URLs. If no authorized HTTP application URL
 is available, skip browser setup/MCP navigation and use repository source, the diff, and existing tests; never treat
 that as permission to invent selectors or environment behavior.

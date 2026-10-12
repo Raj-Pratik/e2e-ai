@@ -19,7 +19,6 @@ const SNAPSHOT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const PLAYWRIGHT_AGENT_FILES = [
     '.github/agents/playwright-test-planner.agent.md',
     '.github/agents/playwright-test-generator.agent.md',
-    '.github/agents/playwright-test-healer.agent.md',
 ];
 const MAX_HEALING_ATTEMPTS = 3;
 class SkipJob extends Error {
@@ -125,7 +124,8 @@ async function runGeneratedTests(root, config, setup, specs, log, signal) {
         log(`Test command could not start: ${result.error.message}`);
     const passed = result.exitCode === 0;
     log(passed ? 'Generated tests passed.' : `Generated tests failed (exit ${result.exitCode ?? result.signal}${result.timedOut ? ', timed out' : ''}).`);
-    return { command, exitCode: result.exitCode, passed, timedOut: result.timedOut };
+    const failureOutput = passed ? undefined : redact(`${result.stdout}\n${result.stderr}`.trim().slice(-12_000));
+    return { command, exitCode: result.exitCode, passed, timedOut: result.timedOut, ...(failureOutput ? { failureOutput } : {}) };
 }
 function summarize(job, setup) {
     if (!job.generatedFiles.length)
@@ -285,13 +285,27 @@ export async function runJob(options) {
             if (healingAttempt === MAX_HEALING_ATTEMPTS) {
                 throw new AiE2eError(`Generated Playwright tests did not pass after ${MAX_HEALING_ATTEMPTS} healing attempt(s); the push is blocked.`);
             }
-            const healerPrompt = `Read the task specification at \`${taskRel}\`. The approved Playwright plan is at \`${path.relative(root, planFile).split(path.sep).join('/')}\`.
+            const repairPrompt = `Read the task specification at \`${taskRel}\`. The approved Playwright plan is at \`${path.relative(root, planFile).split(path.sep).join('/')}\`.
 The newly generated specs are: ${currentSpecs.map((spec) => `\`${spec}\``).join(', ')}.
-The last Playwright run failed. Invoke \`playwright-test-healer\` now, inspect the actual failure output and traces,
-and patch only these generated specs or their generated helpers. Do not ask for approval again, do not create unrelated
-files, and do not claim success without running the exact Playwright command. Fix the failure, save the changes, and exit.`;
-            log(`Invoking playwright-test-healer (attempt ${healingAttempt + 1}/${MAX_HEALING_ATTEMPTS}).`);
-            const healingResult = await runWithFallbacks(healerPrompt);
+The last Playwright run failed. Act as the repair engineer: determine the correct commands needed to inspect and rerun
+the test, use the repository's Playwright configuration, and patch only these generated specs or their generated helpers.
+If the failure is an authentication or environment prerequisite, ask the user for the missing input or permission in
+this terminal; do not invent credentials or silently skip the test. If shell execution is denied, report the exact
+permission required so the worker can surface it. Do not ask for plan approval again, do not create unrelated files,
+and do not claim success without running the exact Playwright command. Save the fix and exit when done.
+
+## Exact failed command
+\`${testRun.command.join(' ')}\`
+
+## Playwright failure report
+${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no reporter output was captured; inspect the Playwright artifacts)'}
+
+## Relevant artifacts
+- Job directory: \`${path.relative(root, jobDir).split(path.sep).join('/')}\`
+- Playwright output directory: \`${setup.outputDir}\`
+- Generated specs: ${currentSpecs.join(', ')}`;
+            log(`Invoking coding CLI repair phase (attempt ${healingAttempt + 1}/${MAX_HEALING_ATTEMPTS}).`);
+            const healingResult = await runWithFallbacks(repairPrompt);
             providerOut.flush();
             if (healingResult.error || healingResult.exitCode !== 0) {
                 const reason = healingResult.aborted
@@ -301,7 +315,7 @@ files, and do not claim success without running the exact Playwright command. Fi
                         : healingResult.error
                             ? healingResult.error.message
                             : `exit code ${healingResult.exitCode ?? healingResult.signal}`;
-                throw new AiE2eError(`Playwright healer failed: ${reason}. ${redact(healingResult.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
+                throw new AiE2eError(`Coding CLI repair phase failed: ${reason}. ${redact(healingResult.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
             }
             const healed = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
             restored.patches.push(...healed.patches);
@@ -312,7 +326,7 @@ files, and do not claim success without running the exact Playwright command. Fi
                 .filter((file) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(file))
                 .sort();
             if (!currentSpecs.length)
-                throw new AiE2eError('The healer removed every generated Playwright spec; the push is blocked.');
+                throw new AiE2eError('The repair agent removed every generated Playwright spec; the push is blocked.');
             generatedFiles = afterHealing.filter((file) => !known.has(file) && fs.existsSync(path.join(root, file))).sort();
         }
         if (config.generation.commitGeneratedTests) {
