@@ -38,7 +38,7 @@ describe('copilot invocation', () => {
   const copilot = getProvider('copilot');
 
   it('runs non-interactively with shell access denied by default', () => {
-    const { command, args } = copilot.buildInvocation(request({ secretEnvNames: ['GH_TOKEN'] }));
+    const { command, args } = copilot.buildInvocation(request({ secretEnvNames: ['GH_TOKEN'], settings: { ...defaultProviderSettings(), allowedShellCommands: [] } }));
     assert.equal(command, 'copilot');
     assert.deepEqual(args.slice(0, 2), ['-p', request().instruction]);
     for (const flag of ['--silent', '--no-ask-user', '--allow-all-tools', '--deny-tool=shell', '--secret-env-vars=GH_TOKEN']) assert.ok(args.includes(flag), flag);
@@ -78,7 +78,7 @@ describe('claude invocation', () => {
   const claude = getProvider('claude');
 
   it('keeps the prompt positional right after -p and restricts tools', () => {
-    const { command, args } = claude.buildInvocation(request({ settings: { ...defaultProviderSettings(), model: 'sonnet' } }));
+    const { command, args } = claude.buildInvocation(request({ settings: { ...defaultProviderSettings(), model: 'sonnet', allowedShellCommands: [] } }));
     assert.equal(command, 'claude');
     assert.deepEqual(args.slice(0, 2), ['-p', request().instruction]);
     assert.equal(args[args.indexOf('--permission-mode') + 1], 'acceptEdits');

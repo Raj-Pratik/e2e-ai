@@ -24,6 +24,8 @@ export function hookBlock(cliRef) {
         'if [ -z "${AI_E2E_SKIP:-}" ] && command -v node >/dev/null 2>&1; then',
         '  ai_e2e_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"',
         '  ai_e2e_cli="$(command -v ai-e2e 2>/dev/null || true)"',
+        '  # Version-manager shims (asdf, nvm) can resolve to a non-working binary; fall back to the recorded path.',
+        '  if [ -n "$ai_e2e_cli" ] && ! "$ai_e2e_cli" --version >/dev/null 2>&1; then ai_e2e_cli=""; fi',
         '  ai_e2e_from_path=0',
         '  if [ -n "$ai_e2e_cli" ]; then ai_e2e_from_path=1; else ai_e2e_cli=' + cliRef + '; fi',
         '  if [ -f "$ai_e2e_cli" ] && ai_e2e_refs="$(mktemp "${TMPDIR:-/tmp}/ai-e2e-refs.XXXXXX" 2>/dev/null)"; then',

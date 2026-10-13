@@ -43,55 +43,69 @@ describe('git push integration', () => {
     assert.equal(jobs(repo.root).length, 0);
   });
 
-  it('accepting starts a background worker and the push does not wait for it', async () => {
+  it('accepting runs generation in the foreground; the push waits for passing tests', async () => {
     const repo = await setup();
-    const release = path.join(tmpDir(), 'release');
-    const env = testEnv({ AI_E2E_ASSUME: 'yes', FAKE_MODE: 'block', FAKE_RELEASE: release });
-    const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, env);
+    const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /started background job/);
+    assert.match(result.stderr, /tests passed locally/);
     assert.equal(remoteHead(repo.remote), git(repo.root, 'rev-parse', 'HEAD').trim());
 
-    // The provider is still blocked, so the push provably returned before generation finished.
-    const running = await waitFor(() => jobs(repo.root).find((j) => j.status === 'running'), 20_000, 'running job');
-    assert.ok(running.pid);
-    fs.writeFileSync(release, '');
-    const done = await waitFor(() => jobs(repo.root).find((j) => j.status === 'succeeded'), 30_000, 'job completion');
+    // The push did not return until the job finished.
+    const done = jobs(repo.root).find((j) => j.status === 'succeeded');
+    assert.ok(done, 'job succeeded before push returned');
     assert.deepEqual(done.generatedFiles, ['e2e/generated-feature.spec.ts']);
-
     assert.equal(fs.readFileSync(path.join(repo.root, 'src/wip.ts'), 'utf8'), 'developer work in progress\n');
     assert.equal(git(repo.root, 'diff', '--cached', '--name-only').trim(), '');
-    assert.equal(git(repo.root, 'log', '-1', '--format=%s').trim(), 'orders page');
     assert.match(fs.readFileSync(new JobStore(path.join(repo.root, '.ai-e2e')).logFile(done.id), 'utf8'), /\[copilot\] leaked token \[REDACTED\]/);
   });
 
-  it('a failing worker does not reject the push', async () => {
+  it('accepting with commits enabled commits the tests with the job trailer and auto-pushes them', async () => {
     const repo = await setup();
-    const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes', FAKE_MODE: 'fail' }));
+    writeConfig(repo.root, fakeProviderConfig({ generation: { interactive: false, commitGeneratedTests: true } }));
+    const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(remoteHead(repo.remote), git(repo.root, 'rev-parse', 'HEAD').trim());
-    const failed = await waitFor(() => jobs(repo.root).find((j) => j.status === 'failed'), 30_000, 'failed job');
-    assert.match(failed.error ?? '', /exit code 3/);
+    const head = git(repo.root, 'rev-parse', 'HEAD').trim();
+    assert.match(git(repo.root, 'log', '-1', '--format=%B'), /AI-E2E-Job: /);
+    // The follow-up push runs detached after the original push lands.
+    await waitFor(() => (remoteHead(repo.remote) === head ? true : undefined), 90_000, 'generated test commit pushed');
+
+    // Pushing only the generated commit again must not re-prompt.
+    const again = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(jobs(repo.root).length, 1);
   });
 
-  it('a missing provider CLI or broken config does not reject the push', async () => {
+  it('a failing worker blocks the push', async () => {
+    const repo = await setup();
+    const before = remoteHead(repo.remote);
+    const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes', FAKE_MODE: 'fail' }));
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /push is blocked/i);
+    assert.equal(remoteHead(repo.remote), before);
+    const failed = jobs(repo.root).find((j) => j.status === 'failed');
+    assert.match(failed?.error ?? '', /exit code 3/);
+  });
+
+  it('a missing provider CLI or broken config blocks the push with a clear message', async () => {
     const repo = await setup();
     writeConfig(repo.root, { providers: { copilot: { command: 'no-such-copilot' } } });
     const first = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
-    assert.equal(first.code, 0, first.stderr);
-    await waitFor(() => jobs(repo.root).find((j) => j.status === 'failed'), 30_000, 'failed job');
+    assert.notEqual(first.code, 0);
+    assert.match(first.stderr, /push is blocked/i);
 
-    commit(repo.root, { 'src/more.ts': 'export {};\n' }, 'more');
     fs.writeFileSync(path.join(repo.root, '.ai-e2e.json'), '{ not json');
     const second = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
-    assert.equal(second.code, 0, second.stderr);
-    assert.match(second.stderr, /skipped \(.*not valid JSON/);
+    assert.notEqual(second.code, 0);
+    assert.match(second.stderr, /not valid JSON/);
+
+    const bypass = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_SKIP: '1' }));
+    assert.equal(bypass.code, 0, bypass.stderr);
   });
 
   it('a missing CLI build does not reject the push', async () => {
     const repo = await setup();
     const hook = path.join(repo.root, '.git', 'hooks', 'pre-push');
-    fs.writeFileSync(hook, fs.readFileSync(hook, 'utf8').replace(/ai_e2e_cli=.*/, "ai_e2e_cli='/nonexistent/cli.js'"));
+    fs.writeFileSync(hook, fs.readFileSync(hook, 'utf8').replace('command -v ai-e2e 2>/dev/null || true', 'true').replace(/else ai_e2e_cli=.*?; fi/, "else ai_e2e_cli='/nonexistent/cli.js'; fi"));
     const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stderr, /CLI not found/);

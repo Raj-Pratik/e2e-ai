@@ -2,14 +2,26 @@ import fs from 'node:fs';
 import { analyzeOutgoing } from './changes.js';
 import { loadConfig, stateDirPath } from './config.js';
 import { errorMessage } from './errors.js';
-import { findRepoRoot } from './git.js';
+import { findRepoRoot, tryGit } from './git.js';
 import { JobStore } from './jobs.js';
 import { startJob } from './launcher.js';
 import { askYesNo, openTerminal } from './prompt.js';
 import { parsePrePushInput, refKind } from './refs.js';
 import { createLogger } from './log.js';
-import { runJob } from './worker.js';
+import { GENERATED_TRAILER, runJob } from './worker.js';
 export const QUESTION = 'Would you like to generate E2E tests for these changes using AI? [y/N] ';
+/** True when every outgoing commit was created by ai-e2e itself (identified by its commit trailer). */
+async function onlyGeneratedTestCommits(root, refs) {
+    for (const ref of refs) {
+        if (refKind(ref) !== 'update')
+            return false;
+        const out = await tryGit(root, ['log', '--format=%B%x00', `${ref.remoteSha}..${ref.localSha}`]);
+        const bodies = out?.split('\0').map((b) => b.trim()).filter(Boolean);
+        if (!bodies?.length || !bodies.every((body) => new RegExp(`^${GENERATED_TRAILER}: `, 'm').test(body)))
+            return false;
+    }
+    return true;
+}
 /** pre-push entry point. Accepted generation failures block the push. */
 export async function runPrePushHook(params) {
     const say = (msg) => params.write(`ai-e2e: ${msg}\n`);
@@ -23,6 +35,10 @@ export async function runPrePushHook(params) {
         const refs = parsePrePushInput(params.stdin).filter((r) => refKind(r) !== 'delete');
         if (!refs.length)
             return 'nothing-to-push';
+        if (await onlyGeneratedTestCommits(root, refs)) {
+            say('only ai-e2e generated test commits are outgoing; no prompt needed.');
+            return 'no-relevant-changes';
+        }
         const assumed = params.env.AI_E2E_ASSUME?.trim().toLowerCase();
         let accepted;
         if (assumed === 'yes' || assumed === 'no') {
@@ -89,8 +105,12 @@ export async function runPrePushHook(params) {
                 });
                 const job = await runJob({ repoRoot: root, jobId: result.job.id, log });
                 if (job.status === 'succeeded') {
-                    say(`generated and validated tests for job ${job.id}. Push may continue.`);
+                    say(`tests passed locally and were committed (job ${job.id}). Push continues.`);
                     return 'started';
+                }
+                if (job.status === 'skipped') {
+                    say(`no E2E test added (${job.summary ?? 'skipped'}). Push continues.`);
+                    return 'no-relevant-changes';
                 }
                 say(`generation did not pass for job ${job.id}; push is blocked.`);
                 return 'generation-failed';

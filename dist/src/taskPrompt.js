@@ -4,6 +4,8 @@ import { rankRelated } from './playwright.js';
 import { redactSecrets } from './redact.js';
 const MAX_SUPPORT_LISTED = 150;
 const MAX_INCLUDED_FILE_BYTES = 30_000;
+/** Completion signal written by the agent; ai-e2e closes the coding CLI session when it appears. */
+export const DONE_FILE = 'done.json';
 function readSafe(root, rel) {
     try {
         const abs = path.resolve(root, rel);
@@ -111,6 +113,17 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
 - Never claim that tests passed, were healed, or are complete based on intent or static inspection. The outer ai-e2e
   worker will run the exact generated specs after this session closes; if the app server or auth setup is required,
   rely on the repository Playwright configuration to start it and run its setup dependencies.
+
+## Completion signal (mandatory)
+Never stop after writing tests. Keep the loop going — run the new specs, read the Playwright report, fix the generated
+tests/helpers, rerun — until every new spec passes locally. Ask the user in this terminal only when you genuinely need
+their input (for example authentication or environment details), then continue the loop.
+When the new specs pass, write \`${path.relative(repoRoot, input.jobDir).split(path.sep).join('/')}/${DONE_FILE}\` with
+\`{"status":"passed","specs":["<spec paths>"],"command":"<command you ran>"}\`. ai-e2e then closes this session
+automatically, re-verifies the specs, commits them and pushes. Do not ask the user to exit or type /exit.
+If the change clearly needs no E2E test (non-product change), write \`{"status":"not-needed","reason":"<why>"}\`.
+If a blocker cannot be resolved even with the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\`.
+Never write \`"passed"\` before the tests actually pass.
 
 ## Final answer
 Reply with: (1) the list of files you created, (2) what each test covers, (3) the observed Playwright command and

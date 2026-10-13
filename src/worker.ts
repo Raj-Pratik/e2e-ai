@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { analyzeOutgoing, type ChangeSet } from './changes.js';
 import { loadConfig, stateDirPath, type Config } from './config.js';
 import { AiE2eError, errorMessage } from './errors.js';
@@ -12,10 +12,12 @@ import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, secretEnvNames } from './providers/index.js';
 import { redact } from './redact.js';
 import { parsePrePushInput } from './refs.js';
-import { buildTask } from './taskPrompt.js';
+import { buildTask, DONE_FILE } from './taskPrompt.js';
 
 export const REFS_FILE = 'refs.txt';
 export const TASK_FILE = 'task.md';
+/** Commit trailer marking ai-e2e generated test commits; pushes containing only these skip the prompt. */
+export const GENERATED_TRAILER = 'AI-E2E-Job';
 
 const SNAPSHOT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const PLAYWRIGHT_AGENT_FILES = [
@@ -164,10 +166,26 @@ function summarize(job: Pick<JobRecord, 'generatedFiles' | 'proposedPatches' | '
   return lines.join('\n');
 }
 
-function scheduleFollowUpPush(root: string, remote: string, refs: ReturnType<typeof parsePrePushInput>): void {
+/** Opens the user's terminal device by path so a detached process can still report back to it. */
+function openUserTerminal(): number | null {
+  if (process.platform === 'win32') return null;
+  let ttyFd: number | undefined;
+  try {
+    ttyFd = fs.openSync('/dev/tty', 'r');
+    const device = spawnSync('tty', [], { stdio: [ttyFd, 'pipe', 'ignore'], encoding: 'utf8' }).stdout?.trim();
+    return device && device.startsWith('/dev/') ? fs.openSync(device, 'a') : null;
+  } catch {
+    return null;
+  } finally {
+    if (ttyFd !== undefined) fs.closeSync(ttyFd);
+  }
+}
+
+function scheduleFollowUpPush(root: string, remote: string, refs: ReturnType<typeof parsePrePushInput>, logFile: string): void {
   const ref = refs.find((candidate) => candidate.localRef.startsWith('refs/heads/') && candidate.remoteRef.startsWith('refs/heads/'));
   const cli = process.argv[1];
   if (!ref || !cli) throw new AiE2eError('Could not schedule the follow-up push: branch ref or CLI path is unavailable.');
+  const output = openUserTerminal() ?? fs.openSync(logFile, 'a');
   const child = spawn(
     process.execPath,
     [
@@ -180,9 +198,15 @@ function scheduleFollowUpPush(root: string, remote: string, refs: ReturnType<typ
       '--expected',
       ref.localSha,
     ],
-    { cwd: root, detached: true, stdio: 'ignore', env: { ...process.env, AI_E2E_SKIP: '1' } },
+    {
+      cwd: root,
+      detached: true,
+      stdio: ['ignore', output, output],
+      env: { ...process.env, AI_E2E_SKIP: '1', GIT_TERMINAL_PROMPT: '0' },
+    },
   );
   child.unref();
+  fs.closeSync(output);
 }
 
 export async function runJob(options: WorkerOptions): Promise<JobRecord> {
@@ -239,8 +263,17 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
 
     const providerOut = lineWriter(log, `[${provider.id}] `);
+    const doneFile = path.join(jobDir, DONE_FILE);
+    const readDone = (): { status?: string; reason?: string } | null => {
+      try {
+        return JSON.parse(fs.readFileSync(doneFile, 'utf8')) as { status?: string; reason?: string };
+      } catch {
+        return null;
+      }
+    };
     const runProvider = async (model: string | null, prompt: string) => {
       if (model) normalizePlaywrightAgentModels(root, model);
+      fs.rmSync(doneFile, { force: true });
       const invocation = provider.buildInvocation({
         repoRoot: root,
         instruction: prompt,
@@ -257,20 +290,32 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
         killProcessGroup: !interactive,
         onOutput: (chunk) => providerOut.write(chunk),
         interactive,
+        // The agent writes done.json when its tests pass (or it is blocked); then the session is closed for it.
+        stopWhen: () => readDone() !== null,
         ...(signal ? { signal } : {}),
       });
+    };
+    const finishPhase = (attempt: Awaited<ReturnType<typeof runProvider>>): void => {
+      providerOut.flush();
+      if (!attempt.completed) return;
+      log('Agent reported completion; the coding CLI session was closed automatically.');
+      const done = readDone();
+      if (done?.status === 'not-needed') throw new SkipJob(`agent decided no E2E test is needed: ${redact(done.reason ?? 'non-product change')}`);
+      if (done?.status === 'blocked') {
+        throw new AiE2eError(`The agent reported a blocker: ${redact(done.reason ?? 'no reason given')}`);
+      }
     };
     const runWithFallbacks = async (prompt: string) => {
       let attempt = await runProvider(settings.model, prompt);
       for (const fallbackModel of settings.fallbackModels) {
-        if (attempt.exitCode === 0 || attempt.error || attempt.aborted || attempt.timedOut) break;
+        if (attempt.completed || attempt.exitCode === 0 || attempt.error || attempt.aborted || attempt.timedOut) break;
         log(`Provider exited unsuccessfully; retrying with fallback model ${fallbackModel}.`);
         attempt = await runProvider(fallbackModel, prompt);
       }
       return attempt;
     };
     let result = await runWithFallbacks(instruction);
-    providerOut.flush();
+    finishPhase(result);
 
     const restored = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
     const listedAfter = await listFiles(root, scanDirs);
@@ -289,7 +334,7 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
 
     job = store.update(jobId, { generatedFiles, proposedPatches: restored.patches, warnings });
 
-    if (result.error || result.exitCode !== 0) {
+    if (!result.completed && (result.error || result.exitCode !== 0)) {
       const reason = result.aborted
         ? 'interrupted'
         : result.timedOut
@@ -327,7 +372,10 @@ the test, use the repository's Playwright configuration, and patch only these ge
 If the failure is an authentication or environment prerequisite, ask the user for the missing input or permission in
 this terminal; do not invent credentials or silently skip the test. If shell execution is denied, report the exact
 permission required so the worker can surface it. Do not ask for plan approval again, do not create unrelated files,
-and do not claim success without running the exact Playwright command. Save the fix and exit when done.
+and do not claim success without running the exact Playwright command. Keep fixing and rerunning in a loop until the
+tests pass. When they pass, write \`${path.relative(root, doneFile).split(path.sep).join('/')}\` containing
+\`{"status":"passed"}\`; ai-e2e then closes this session automatically. Only if a blocker cannot be resolved even with
+the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\` to that file instead.
 
 ## Exact failed command
 \`${testRun.command.join(' ')}\`
@@ -341,8 +389,8 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
 - Generated specs: ${currentSpecs.join(', ')}`;
       log(`Invoking coding CLI repair phase (attempt ${healingAttempt + 1}/${MAX_HEALING_ATTEMPTS}).`);
       const healingResult = await runWithFallbacks(repairPrompt);
-      providerOut.flush();
-      if (healingResult.error || healingResult.exitCode !== 0) {
+      finishPhase(healingResult);
+      if (!healingResult.completed && (healingResult.error || healingResult.exitCode !== 0)) {
         const reason = healingResult.aborted
           ? 'interrupted'
           : healingResult.timedOut
@@ -371,15 +419,15 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
         '-m',
         'test: add generated Playwright coverage',
         '-m',
-        'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>',
+        `${GENERATED_TRAILER}: ${jobId}\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`,
         '--',
         ...generatedFiles,
       ]);
       log('Committed generated Playwright tests after a passing run.');
       if (job.source === 'pre-push') {
         if (!job.remote) throw new AiE2eError('Generated tests were committed, but the pre-push remote is unavailable for publishing.');
-        scheduleFollowUpPush(root, job.remote, refs);
-        log('Original push will finish first; a guarded follow-up push was scheduled for the generated tests.');
+        scheduleFollowUpPush(root, job.remote, refs, store.logFile(jobId));
+        log('Your push continues now; the generated-test commit is pushed automatically right after it, and you will be told when it is done.');
       }
     }
 

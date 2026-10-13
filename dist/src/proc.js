@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 const DEFAULT_MAX_OUTPUT = 10 * 1024 * 1024;
@@ -47,8 +47,10 @@ export function runProcess(command, args, options) {
         const useGroup = Boolean(options.killProcessGroup) && process.platform !== 'win32';
         let timedOut = false;
         let aborted = false;
+        let completed = false;
         let settled = false;
         let timer;
+        let poller;
         let killTimer;
         let child;
         let interactiveFd;
@@ -63,9 +65,15 @@ export function runProcess(command, args, options) {
             settled = true;
             if (timer)
                 clearTimeout(timer);
+            if (poller)
+                clearInterval(poller);
             if (killTimer)
                 clearTimeout(killTimer);
             options.signal?.removeEventListener('abort', onAbort);
+            if (interactiveFd !== undefined && (completed || timedOut || aborted) && process.platform !== 'win32') {
+                // A full-screen CLI stopped by a signal may leave the terminal in raw mode.
+                spawnSync('stty', ['sane'], { stdio: [interactiveFd, 'ignore', 'ignore'] });
+            }
             if (interactiveFd !== undefined) {
                 try {
                     fs.closeSync(interactiveFd);
@@ -89,6 +97,7 @@ export function runProcess(command, args, options) {
                 stderr: stderr.toString(),
                 timedOut,
                 aborted,
+                completed,
                 truncated: stdout.truncated || stderr.truncated,
             };
             if (error)
@@ -140,6 +149,24 @@ export function runProcess(command, args, options) {
                 timedOut = true;
                 terminate();
             }, options.timeoutMs);
+        }
+        if (options.stopWhen) {
+            const stopWhen = options.stopWhen;
+            poller = setInterval(() => {
+                if (completed || timedOut || aborted)
+                    return;
+                let done = false;
+                try {
+                    done = stopWhen();
+                }
+                catch {
+                    done = false;
+                }
+                if (done) {
+                    completed = true;
+                    terminate();
+                }
+            }, options.stopPollMs ?? 1000);
         }
         if (options.signal) {
             if (options.signal.aborted)

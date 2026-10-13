@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -14,6 +14,9 @@ export interface RunOptions {
   killProcessGroup?: boolean;
   onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void;
   interactive?: boolean;
+  /** Polled while the child runs; when it returns true the child is stopped and the run counts as completed. */
+  stopWhen?: () => boolean;
+  stopPollMs?: number;
 }
 
 export interface RunResult {
@@ -23,6 +26,8 @@ export interface RunResult {
   stderr: string;
   timedOut: boolean;
   aborted: boolean;
+  /** True when `stopWhen` signalled completion and the child was closed by us. */
+  completed: boolean;
   truncated: boolean;
   error?: Error;
 }
@@ -75,8 +80,10 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     const useGroup = Boolean(options.killProcessGroup) && process.platform !== 'win32';
     let timedOut = false;
     let aborted = false;
+    let completed = false;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let poller: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     let child: ChildProcess | undefined;
     let interactiveFd: number | undefined;
@@ -91,8 +98,13 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (poller) clearInterval(poller);
       if (killTimer) clearTimeout(killTimer);
       options.signal?.removeEventListener('abort', onAbort);
+      if (interactiveFd !== undefined && (completed || timedOut || aborted) && process.platform !== 'win32') {
+        // A full-screen CLI stopped by a signal may leave the terminal in raw mode.
+        spawnSync('stty', ['sane'], { stdio: [interactiveFd, 'ignore', 'ignore'] });
+      }
       if (interactiveFd !== undefined) {
         try {
           fs.closeSync(interactiveFd);
@@ -114,6 +126,7 @@ export function runProcess(command: string, args: readonly string[], options: Ru
         stderr: stderr.toString(),
         timedOut,
         aborted,
+        completed,
         truncated: stdout.truncated || stderr.truncated,
       };
       if (error) result.error = error;
@@ -163,6 +176,22 @@ export function runProcess(command: string, args: readonly string[], options: Ru
         timedOut = true;
         terminate();
       }, options.timeoutMs);
+    }
+    if (options.stopWhen) {
+      const stopWhen = options.stopWhen;
+      poller = setInterval(() => {
+        if (completed || timedOut || aborted) return;
+        let done = false;
+        try {
+          done = stopWhen();
+        } catch {
+          done = false;
+        }
+        if (done) {
+          completed = true;
+          terminate();
+        }
+      }, options.stopPollMs ?? 1000);
     }
     if (options.signal) {
       if (options.signal.aborted) onAbort();

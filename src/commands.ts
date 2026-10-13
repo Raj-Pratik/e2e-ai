@@ -311,15 +311,16 @@ async function cmdPublishAfterPush(args: string[], io: CliIO): Promise<number> {
         maxOutputBytes: 64 * 1024 * 1024,
       });
       if (result.exitCode === 0) {
-        io.out(`ai-e2e: generated tests pushed to ${remote}/${branch}.\n`);
+        const head = (await tryGit(root, ['rev-parse', '--short', 'HEAD']))?.trim() ?? 'HEAD';
+        io.out(`\nai-e2e: ✅ Done. Generated E2E tests passed locally and were pushed to ${remote}/${branch} (${head}).\n`);
         return 0;
       }
-      io.err(`ai-e2e: follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\n`);
+      io.err(`\nai-e2e: follow-up push of the generated tests failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\nRun \`AI_E2E_SKIP=1 git push\` to publish them.\n`);
       return 1;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  io.err('ai-e2e: original push was not observed on the remote; generated tests were left committed locally.\n');
+  io.err('\nai-e2e: original push was not observed on the remote; generated tests were left committed locally. Run `AI_E2E_SKIP=1 git push` to publish them.\n');
   return 1;
 }
 

@@ -171,10 +171,19 @@ what to inspect or rerun, applies only generated-test/helper fixes, and the
 worker reruns the exact specs. It makes up to three repair attempts; if the
 tests still fail, the push remains blocked.
 
-When generated tests pass, ai-e2e commits them during the hook, allows the
-original push to finish, verifies that the feature commit reached the remote,
-and performs a guarded follow-up push automatically. No special push command
-is required.
+The interactive coding CLI never has to be exited by hand. When the agent's
+specs pass (or it decides no test is needed, or it is blocked) it writes
+`.ai-e2e/jobs/<id>/done.json` (`{"status":"passed"|"not-needed"|"blocked", ...}`).
+ai-e2e watches for that file, closes the session automatically, restores the
+terminal, and re-runs the specs itself before trusting the result.
+
+When generated tests pass, ai-e2e commits them during the hook with an
+`AI-E2E-Job: <id>` trailer, allows the original push to finish, verifies that
+the feature commit reached the remote, and performs a guarded follow-up push
+automatically. Its result is printed to your terminal:
+`ai-e2e: ✅ Done. Generated E2E tests passed locally and were pushed to origin/<branch> (<sha>).`
+Pushes that contain only ai-e2e generated commits never trigger the
+"generate E2E tests?" prompt again. No special push command is required.
 
 An optional foreground wrapper is also available:
 

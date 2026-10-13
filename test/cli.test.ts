@@ -192,6 +192,31 @@ describe('pre-push hook handler', () => {
     assert.equal(outcome, 'nothing-to-push');
   });
 
+  it('does not prompt again when only ai-e2e generated test commits are pushed', async () => {
+    const repo = createRepo();
+    writeConfig(repo.root, fakeProviderConfig());
+    const remoteSha = git(repo.root, 'rev-parse', 'origin/main').trim();
+    fs.mkdirSync(path.join(repo.root, 'e2e'), { recursive: true });
+    fs.writeFileSync(path.join(repo.root, 'e2e', 'gen.spec.ts'), 'export {};\n');
+    git(repo.root, 'add', 'e2e/gen.spec.ts');
+    git(repo.root, 'commit', '-q', '-m', 'test: add generated Playwright coverage', '-m', 'AI-E2E-Job: 20260101-000000-abcdef');
+    const head = git(repo.root, 'rev-parse', 'HEAD').trim();
+    let prompted = false;
+    const outcome = await runPrePushHook({
+      cwd: repo.root,
+      remote: 'origin',
+      stdin: `refs/heads/main ${head} refs/heads/main ${remoteSha}\n`,
+      env: testEnv(),
+      write: () => undefined,
+      openTty: () => {
+        prompted = true;
+        return fakeTty('y\n')();
+      },
+    });
+    assert.equal(outcome, 'no-relevant-changes');
+    assert.equal(prompted, false);
+  });
+
   it('hook command blocks on malformed input', async () => {
     const io = captureIO(tmpDir(), testEnv(), 'not valid input');
     assert.equal(await run(['hook', 'pre-push', 'origin', 'url'], io), 1);

@@ -157,4 +157,22 @@ describe('background worker job execution', () => {
     assert.equal(job.testRun?.passed, true);
     assert.ok(logs.some((line) => /coding CLI repair phase \(attempt 1\/3\)/.test(line)));
   });
+
+  it('closes the coding CLI session when the agent signals completion', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ generation: { timeoutSeconds: 60 } }) });
+    process.env.FAKE_MODE = 'done-and-hang';
+    const started = Date.now();
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.ok(Date.now() - started < 30_000, 'session must be closed long before the timeout');
+    assert.ok(logs.some((line) => /session was closed automatically/.test(line)));
+  });
+
+  it('skips without blocking when the agent decides no E2E test is needed', async () => {
+    const { root, jobId } = await prepare();
+    process.env.FAKE_MODE = 'not-needed';
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'skipped');
+    assert.match(job.summary ?? '', /docs only/);
+  });
 });

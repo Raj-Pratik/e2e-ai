@@ -58,6 +58,16 @@ switch (process.env.FAKE_MODE ?? 'write') {
     wait();
     break;
   }
+  case 'done-and-hang':
+    // Simulates an interactive CLI that never exits on its own after signalling completion.
+    writeTest();
+    fs.writeFileSync(path.join(path.dirname(taskRel), 'done.json'), JSON.stringify({ status: 'passed' }));
+    setInterval(() => undefined, 1000);
+    break;
+  case 'not-needed':
+    fs.writeFileSync(path.join(path.dirname(taskRel), 'done.json'), JSON.stringify({ status: 'not-needed', reason: 'docs only' }));
+    setInterval(() => undefined, 1000);
+    break;
   default:
     console.error('unknown FAKE_MODE');
     process.exit(8);
