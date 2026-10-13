@@ -6,20 +6,14 @@ Inspect the repository first and make only the setup changes required:
 1. If Playwright is not configured, choose the repository-appropriate package manager and install
    the required Playwright test package, then create a working playwright.config file and test
    directory. Preserve the project's existing conventions.
-2. Install the Playwright agent definitions with:
-   npx playwright init-agents --loop=vscode
-3. Configure the planner and generator agents so they are available to the coding CLI.
-   Keep the generated healer definition if the Playwright installer creates one, but the runtime
-   uses a normal coding-CLI repair phase after failures. Set model metadata for generated agents
-   to models that exist in the current CLI catalog:
-   - Copilot: primary \`gpt-6-luna\`, fallback \`gpt-5.6-terra\`.
-   - Claude: primary \`claude-haiku-5.5\`, fallback \`claude-sonnet-5.5\`.
-   Remove obsolete model values such as \`claude-sonnet-4.6\`; never leave an unavailable model in an agent file.
-4. ${providerId === 'copilot' ? 'If the Copilot skills plugin is not already installed, run:' : 'If the repository has coding-agent skills configured, load them; do not install a Copilot plugin when Copilot is not the selected provider.'}
+2. Make sure \`npx playwright test\` can run locally: install the browsers needed by the config
+   (\`npx playwright install\`), and configure \`webServer\` and any auth/setup project if the app needs them.
+   Do not install Playwright agent definitions or Playwright MCP; the coding CLI writes and runs tests itself.
+3. ${providerId === 'copilot' ? 'If the Copilot skills plugin is not already installed, run:' : 'If the repository has coding-agent skills configured, load them; do not install a Copilot plugin when Copilot is not the selected provider.'}
 ${providerId === 'copilot' ? `   copilot plugin marketplace add mattpocock/skills
    copilot plugin install mattpocock-skills@mattpocock` : ''}
    Use the available skills when deciding how to plan, generate, diagnose, and repair E2E tests.
-5. Verify the resulting Playwright configuration and agent files. Do not generate feature tests
+4. Verify the resulting Playwright configuration by listing tests (\`npx playwright test --list\`). Do not generate feature tests
    during this setup task.
 
 You may install or update development dependencies required for this setup. Do not modify

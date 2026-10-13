@@ -20,10 +20,6 @@ export const TASK_FILE = 'task.md';
 export const GENERATED_TRAILER = 'AI-E2E-Job';
 
 const SNAPSHOT_MAX_FILE_BYTES = 5 * 1024 * 1024;
-const PLAYWRIGHT_AGENT_FILES = [
-  '.github/agents/playwright-test-planner.agent.md',
-  '.github/agents/playwright-test-generator.agent.md',
-];
 const MAX_HEALING_ATTEMPTS = 3;
 
 export interface WorkerOptions {
@@ -50,18 +46,6 @@ function snapshotFiles(root: string, files: string[]): Snapshot {
     }
   }
   return { files: map };
-}
-
-function normalizePlaywrightAgentModels(root: string, model: string): void {
-  for (const relative of PLAYWRIGHT_AGENT_FILES) {
-    const file = path.join(root, relative);
-    if (!fs.existsSync(file)) {
-      throw new AiE2eError(`Required Playwright agent definition is missing: ${relative}. Run \`ai-e2e playwright-init --yes\` first.`);
-    }
-    const source = fs.readFileSync(file, 'utf8');
-    const normalized = /^model:\s*.*$/m.test(source) ? source.replace(/^model:\s*.*$/m, `model: ${model}`) : source;
-    if (normalized !== source) fs.writeFileSync(file, normalized);
-  }
 }
 
 function lineWriter(log: Logger, prefix: string): { write(chunk: string): void; flush(): void } {
@@ -227,7 +211,7 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     if (!setup.found) {
       throw new SkipJob(
         'No Playwright setup detected (no playwright.config.* and no @playwright/test dependency). ' +
-          'Run `ai-e2e playwright-init --yes` so the coding CLI can initialise Playwright and its agents, then re-run `ai-e2e generate`.',
+          'Run `ai-e2e playwright-init --yes` so the coding CLI can initialise Playwright, then re-run `ai-e2e generate`.',
       );
     }
     log(`Playwright: config=${setup.configPath ?? 'none'}, testDir=${setup.testDir}, outputDir=${setup.outputDir}, ${setup.testFiles.length} existing test(s).`);
@@ -246,12 +230,12 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     if (!availability.available) throw new AiE2eError(`${provider.displayName} is unavailable: ${availability.reason}`);
     log(`Provider ${provider.displayName}: ${availability.resolvedPath} (${availability.version ?? 'unknown version'}).`);
 
-    log('Playwright MCP is not used; Playwright agent definitions are managed by the coding CLI setup.');
+    log('The coding CLI plans, writes and runs the tests itself (no Playwright sub-agents or MCP).');
 
     const taskFile = path.join(jobDir, TASK_FILE);
     fs.writeFileSync(
       taskFile,
-      buildTask({ repoRoot: root, jobDir, changeSet, setup, config, mcp: null, mcpNote: 'managed by Playwright agents instead' }),
+      buildTask({ repoRoot: root, jobDir, changeSet, setup, config, mcp: null, mcpNote: 'not used' }),
     );
     const taskRel = path.relative(root, taskFile).split(path.sep).join('/');
     const instruction = `Read the task specification in \`${taskRel}\` and complete it exactly. Follow every rule in that file.`;
@@ -272,7 +256,6 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
       }
     };
     const runProvider = async (model: string | null, prompt: string) => {
-      if (model) normalizePlaywrightAgentModels(root, model);
       fs.rmSync(doneFile, { force: true });
       const invocation = provider.buildInvocation({
         repoRoot: root,
@@ -347,7 +330,7 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
 
     const planFile = path.join(jobDir, 'plan.md');
     if (!fs.existsSync(planFile) || fs.statSync(planFile).size === 0) {
-      throw new AiE2eError('The planner did not create a non-empty plan artifact; no tests may be generated.');
+      throw new AiE2eError('The agent did not write an approved plan (plan.md); no tests may be generated.');
     }
 
     const specs = generatedFiles.filter((f) => /\.(spec|test)\.[cm]?[jt]sx?$/.test(f));

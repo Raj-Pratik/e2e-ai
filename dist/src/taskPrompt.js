@@ -53,53 +53,42 @@ export function buildTask(input) {
     const budget = new Budget(config.context.maxPromptBytes);
     const out = setup.outputDir;
     const changedPaths = changeSet.files.map((f) => f.path);
-    budget.add(`# Task: plan, generate, validate and heal Playwright E2E tests for outgoing changes
+    const jobRel = path.relative(repoRoot, input.jobDir).split(path.sep).join('/');
+    budget.add(`# Task: plan, generate and run Playwright E2E tests for outgoing changes
 
 You are generating end-to-end tests for code that a developer is pushing. Work only inside this repository.
 
-## Rules (mandatory)
-- Constitutional gate: never create, edit, or generate a Playwright spec before
-  \`playwright-test-planner\` has presented a plan in this terminal and the user has explicitly approved it.
-  This rule applies even when the flow appears simple. Never infer approval from silence, a prior answer, or the
-  initial request to generate tests.
-  - Stay focused on browser coverage. Do not ask open-ended motivation or "why" questions.
-  - First inspect the outgoing commits and classify the change. Documentation, Docker/Kubernetes, CI/CD, package
-    metadata, generated output and test-only changes normally need no E2E test; state that briefly and continue without
-    asking a question when the classification is unambiguous.
-  - For a product flow, use the installed Copilot skills from \`mattpocock/skills\` when available and use these
-    exact Playwright agent definitions created by \`npx playwright init-agents --loop=vscode\`:
-    \`playwright-test-planner\`, \`playwright-test-generator\`, and \`playwright-test-healer\`.
-  - Ask questions only when an answer changes the test plan. Use compact multiple-choice questions (A/B/C, with an
-    "Other" option), covering only the critical user path, expected assertion, role/data fixture and environment.
-    If the flow is clear from the diff, source and existing tests, ask no questions and proceed.
-  - The planner step is mandatory for every product change, including simple flows. Invoke
-    \`playwright-test-planner\` first and present its proposed files, scenarios, user actions, assertions, fixtures,
-    and environment prerequisites in the terminal. Save the same complete plan as Markdown at
-    \`${path.relative(repoRoot, input.jobDir).split(path.sep).join('/')}/plan.md\` before requesting approval.
-    Wait for an explicit user approval or requested revision.
-    Do not invoke \`playwright-test-generator\`, create a spec, or modify any test helper before approval.
-  - The plan artifact is the contract for generation. After approval, the generator must read that exact Markdown file
-    and the task specification before writing a spec. If the plan file is missing or empty, stop and report a blocker.
-  - If a Playwright agent tool reports that it cannot access the repository or a local page, do not stop solely for that
-    reason: use the repository root, task specification, plan artifact, source search and existing tests directly.
-    Never invent selectors or claim a browser observation that did not occur.
-  - After approval, invoke \`playwright-test-generator\` to create the approved tests. Run them with the repository's
-    Playwright command. After every failed run, the outer worker starts a fresh coding-CLI repair phase with the exact
-    failed command, reporter output and artifact paths. The repair agent decides the diagnostic and rerun commands,
-    asks the user only when authentication or environment input is genuinely required, applies only generated-test/helper
-    fixes, and exits; the worker reruns the tests. Repeat until the tests pass or a concrete environment blocker is reported.
-  - If the planner or generator agent is unavailable, stop and report the setup problem instead of silently writing
-    tests without the required planner/generator workflow.
-  - Before finishing, explicitly report whether the user approved the plan, which generator agent ran, which Playwright
-    command actually ran, and how many repair phases were needed. Missing evidence means the workflow is incomplete.
-  - Do not use Playwright MCP. Explore through the Playwright agents and repository source instead.
+## Workflow (you do every step yourself in this session)
+Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwright-test-generator\`,
+\`playwright-test-healer\` or Playwright MCP. You have the repository, the shell and this task file; that is enough.
+
+1. **Analyze.** Read the outgoing commits and diffs below. Decide whether the change affects user-visible product
+   behaviour. Documentation, Docker/Kubernetes, CI/CD, package metadata, unit-test-only, generated output and
+   config-only changes need no E2E test: write the completion file with \`"not-needed"\` (see below) and stop.
+2. **Plan.** Read the changed source, related components and existing E2E tests/helpers. Write the test plan to
+   \`${jobRel}/plan.md\` as a readable spec: files to create, each scenario with its user steps and assertions,
+   fixtures/auth/data used, and the command you will run. Show the same plan in this terminal.
+   Ask questions only when the answer changes the plan (critical path, expected assertion, test data/role,
+   environment). Use short multiple-choice questions with an "Other" option. Never ask "why" questions.
+3. **Approval gate (never skip).** Ask the user to approve or revise the plan. Do not write any spec or helper until
+   the user explicitly approves. If they ask for changes, update \`plan.md\` and ask again.
+4. **Generate.** Write the approved tests yourself, following the plan exactly.
+5. **Run and fix loop.** Run only the new specs with the repository's Playwright command (for example
+   \`npx playwright test <spec paths>\` or the matching package script). The Playwright config starts the web
+   server and runs auth/setup projects automatically. Read the failure output, error context, traces and reports;
+   fix the generated specs/helpers; rerun. Repeat until every new spec passes. Ask the user only when you genuinely
+   need input (credentials, environment, a product question). Never stop while tests are failing.
+6. **Finish.** When the new specs pass, write the completion file. ai-e2e then closes this session, re-runs the
+   specs, commits them and pushes.
+
+## Rules
 - Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
 - Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
   If an existing test or helper must change, describe the proposed patch in your final answer instead of editing it.
-  The only non-test file the workflow may create is the plan artifact at the exact job path above.
+  The only non-test files you may create are \`plan.md\` and the completion file in the job directory.
 - Do NOT run git commands that change state (commit, push, add, reset, checkout, stash). Do NOT install packages.
 - Do NOT read or reference secrets, credentials, \`.env\` files, auth storage-state files or private keys.
-- Do NOT start servers, contact production systems, or perform destructive actions.
+- Do NOT contact production systems or perform destructive actions. Let the Playwright config start any local server.
 - Test user-visible behaviour introduced or changed by the diff below. Prefer accessible locators
   (\`getByRole\`, \`getByLabel\`, \`getByText\`, \`getByTestId\`) over CSS/XPath; never use fixed sleeps (\`waitForTimeout\`) —
   rely on web-first assertions and auto-waiting. Cover loading, error and important edge cases where relevant.
@@ -107,18 +96,12 @@ You are generating end-to-end tests for code that a developer is pushing. Work o
 - Keep tests deterministic and independent. Mark tests that need unavailable data or environments with \`test.skip\` and a reason.
 - Split independent scenarios into separate test files where practical, and put reusable setup/actions/assertions in
   existing common helpers or a new shared helper under the E2E test directory.
-- Run every newly generated test with the repository's Playwright command. Read the Playwright output, traces and
-  reporter metrics. If a test fails, diagnose the failure and patch only the generated tests/helpers, then rerun it.
-  Repeat the generate/run/heal cycle until the new tests pass or a concrete environment blocker is reported.
-- Never claim that tests passed, were healed, or are complete based on intent or static inspection. The outer ai-e2e
-  worker will run the exact generated specs after this session closes; if the app server or auth setup is required,
-  rely on the repository Playwright configuration to start it and run its setup dependencies.
 
 ## Completion signal (mandatory)
 Never stop after writing tests. Keep the loop going — run the new specs, read the Playwright report, fix the generated
 tests/helpers, rerun — until every new spec passes locally. Ask the user in this terminal only when you genuinely need
 their input (for example authentication or environment details), then continue the loop.
-When the new specs pass, write \`${path.relative(repoRoot, input.jobDir).split(path.sep).join('/')}/${DONE_FILE}\` with
+When the new specs pass, write \`${jobRel}/${DONE_FILE}\` with
 \`{"status":"passed","specs":["<spec paths>"],"command":"<command you ran>"}\`. ai-e2e then closes this session
 automatically, re-verifies the specs, commits them and pushes. Do not ask the user to exit or type /exit.
 If the change clearly needs no E2E test (non-product change), write \`{"status":"not-needed","reason":"<why>"}\`.
@@ -126,9 +109,8 @@ If a blocker cannot be resolved even with the user's help, write \`{"status":"bl
 Never write \`"passed"\` before the tests actually pass.
 
 ## Final answer
-Reply with: (1) the list of files you created, (2) what each test covers, (3) the observed Playwright command and
-result if you ran it, (4) any proposed patches to existing files, (5) concrete blockers only. Do not list unverified
-assumptions as if they were completion criteria.
+Reply briefly with: the files you created, what each test covers, the exact Playwright command you ran and its
+result, and any proposed patches to existing files.
 `);
     budget.add(`## Repository Playwright setup
 - Repository root: \`${repoRoot}\`
@@ -137,12 +119,6 @@ assumptions as if they were completion criteria.
 - Test directory: \`${setup.testDir}\` (${setup.testDirSource}); write new tests under \`${out}/\`
 - Existing test files: ${setup.testFiles.length}
 - Playwright-related package scripts: ${Object.keys(setup.scripts).length ? Object.entries(setup.scripts).map(([k, v]) => `\`${k}\` → \`${v}\``).join('; ') : 'none'}
-`);
-    budget.add(`## Playwright agents
-Use \`playwright-test-planner\` and \`playwright-test-generator\`. They were installed by
-\`npx playwright init-agents --loop=vscode\`. Do not navigate to \`file:\` URLs. If no authorized HTTP application URL
-is available, skip browser setup/MCP navigation and use repository source, the diff, and existing tests; never treat
-that as permission to invent selectors or environment behavior.
 `);
     const commitLines = changeSet.ranges.flatMap((r) => [
         `- \`${r.localRef}\` → \`${r.remoteRef}\` (${r.commitCount} commit(s)${r.forced ? ', force push' : ''})`,

@@ -54,7 +54,7 @@ describe('background worker job execution', () => {
     assert.match(task, /src\/checkout\.ts/);
     assert.match(task, /under `e2e\/`/);
     assert.match(task, /e2e\/fixtures\/auth\.ts/);
-    assert.match(task, /Playwright agents/);
+    assert.match(task, /Approval gate/);
     assert.ok(!logs.join('\n').includes('a'.repeat(36)), 'provider output must be redacted in logs');
   });
 
@@ -119,10 +119,10 @@ describe('background worker job execution', () => {
     const job = await runJob({ repoRoot: root, jobId, log });
     assert.equal(job.status, 'succeeded', job.error);
     assert.ok(!JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--additional-mcp-config'));
-    assert.ok(logs.some((l) => /Playwright MCP is not used/.test(l)));
+    assert.ok(logs.some((l) => /no Playwright sub-agents or MCP/.test(l)));
   });
 
-  it('uses Playwright agents instead of MCP when configured', async () => {
+  it('does all work in the coding CLI without Playwright MCP or sub-agents', async () => {
     const config = fakeProviderConfig({ mcp: { playwright: { enabled: true, command: process.execPath, args: ['mcp.js'], baseUrl: 'http://localhost:4000' } } });
     const { root, jobId } = await prepare({ config });
     const argsFile = path.join(tmpDir(), 'args.json');
@@ -131,7 +131,10 @@ describe('background worker job execution', () => {
     process.env.FAKE_TASK_COPY = taskCopy;
     await runJob({ repoRoot: root, jobId, log });
     assert.ok(!JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--additional-mcp-config'));
-    assert.match(fs.readFileSync(taskCopy, 'utf8'), /init-agents --loop=vscode/);
+    const task = fs.readFileSync(taskCopy, 'utf8');
+    assert.match(task, /Do NOT delegate to sub-agents/);
+    assert.match(task, /Approval gate/);
+    assert.doesNotMatch(task, /init-agents/);
   });
 
   it('blocks the job when generated tests fail', async () => {

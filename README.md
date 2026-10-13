@@ -97,7 +97,7 @@ cd /path/to/your/repository
 # Select Copilot or Claude when prompted.
 ai-e2e init --force
 
-# 7. Let the coding CLI configure Playwright and install its agents
+# 7. Let the coding CLI configure Playwright
 ai-e2e playwright-init --yes
 
 # 8. Validate the setup
@@ -116,8 +116,8 @@ ai-e2e playwright-init --yes
 `ai-e2e init` creates `.ai-e2e.json`, installs the pre-push integration and
 asks which provider to use. `ai-e2e playwright-init --yes` hands setup to the
 selected coding CLI. The agent inspects the repository, creates or verifies
-Playwright, runs `npx playwright init-agents --loop=vscode`, and installs the
-Copilot skills plugin when needed:
+Playwright (browsers, `webServer`, auth setup), and installs the Copilot skills
+plugin when needed:
 
 ```sh
 copilot plugin marketplace add mattpocock/skills
@@ -157,15 +157,15 @@ git commit -m "Describe the product change"
 git push -u origin your-branch
 ```
 
-The selected provider then asks about the
-feature, creates a plan, waits for approval, generates tests, runs the new
-Playwright specs, heals failures, and blocks the push if the accepted workflow
-does not pass. If the change is documentation-only, package metadata, Docker,
-Kubernetes, CI, or another non-product change, the planner can explain why E2E
-coverage is unnecessary and ask for confirmation to skip it.
+The selected coding CLI then does the whole job itself in one session, without
+Playwright sub-agents or MCP: it analyzes the outgoing commits, writes a test
+plan to `.ai-e2e/jobs/<id>/plan.md`, waits for your approval, writes the tests,
+and runs and fixes them in a loop until they pass. Documentation, package
+metadata, Docker, Kubernetes, CI and other non-product changes are reported as
+not needing E2E coverage and the push continues.
 
-Test execution is enforced by the worker, not left to the provider prompt: after
-each failed Playwright run it starts a fresh coding-CLI repair phase with the
+The worker also re-runs the specs itself after the session closes: after
+each failed run it starts a fresh coding-CLI repair phase with the
 exact command, failure report, and artifact paths. The repair agent decides
 what to inspect or rerun, applies only generated-test/helper fixes, and the
 worker reruns the exact specs. It makes up to three repair attempts; if the
@@ -192,7 +192,7 @@ ai-e2e push
 # or: ai-e2e push origin experiment
 ```
 
-It runs the planner/approval/generator/repair workflow, verifies the generated
+It runs the analyze/plan/approval/generate/run-and-fix workflow, verifies the generated
 specs with Playwright, commits them, and only then runs the final Git push with
 the hook bypassed. This avoids recursively pushing from inside a pre-push hook.
 
@@ -235,12 +235,11 @@ controlling terminal are reported as `no interactive terminal` and cannot be
 prompted.
 
 On an accepted push, the selected Copilot or Claude CLI runs in the invoking
-terminal. Its task uses the Playwright planner and generator agents, with the
-same coding CLI handling repair phases after failed runs.
+terminal and does all planning, generation and repair itself.
 Questions are limited to compact multiple-choice questions when an answer
 changes coverage; clear flows proceed without questions. The agent generates
 separate scenario specs and shared helpers, runs the new specs, and repeats the
-generator/repair loop until they pass or a concrete environment blocker is
+run/fix loop until they pass or a concrete environment blocker is
 reported. Documentation, package metadata, Docker/Kubernetes, CI and other
 non-product changes are classified without unnecessary questioning.
 
@@ -367,12 +366,11 @@ Verify once with a real run (`ai-e2e config set provider claude && ai-e2e genera
 
 Settings for the new id work automatically under `providers.<id>`.
 
-## Playwright agents
+## Playwright setup
 
 `ai-e2e playwright-init --yes` delegates repository setup to the selected coding CLI. The setup agent verifies or
-creates Playwright, runs `npx playwright init-agents --loop=vscode`, and makes the planner and generator
-agents available to the coding CLI. The generation task uses those agents and does not install or configure Playwright
-MCP.
+creates Playwright, installs browsers and configures `webServer`/auth setup when needed. No Playwright agent
+definitions or Playwright MCP are used; the coding CLI plans, writes and runs tests directly.
 
 ## Jobs, logs and output
 

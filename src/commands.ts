@@ -55,7 +55,7 @@ Commands:
   config [show|get <key>|set <key> <value>|validate|path]
                                       Display or update configuration
   providers [--json]                  List AI providers and whether they are available
-  playwright-init [--yes]             Explain (or, with --yes, let the coding CLI set up Playwright agents)
+  playwright-init [--yes]             Explain (or, with --yes, let the coding CLI set up Playwright)
   uninstall                           Remove the ai-e2e block from the pre-push hook
   help                                Show this help
 
@@ -442,13 +442,13 @@ async function cmdPlaywrightInit(args: string[], io: CliIO): Promise<number> {
   if (setup.found) {
     io.out(`Playwright is already set up (${setup.configPath ?? setup.dependency}).\n`);
     if (!values.yes) {
-      io.out('Re-run with --yes to let the selected coding CLI verify Playwright and install its planner and generator agents.\n');
+      io.out('Re-run with --yes to let the selected coding CLI verify and set up Playwright.\n');
       return 0;
     }
   } else {
     if (!values.yes) {
       io.out(
-        'No Playwright setup found. Re-run `ai-e2e playwright-init --yes` and the selected coding CLI will inspect the repository, install the appropriate package, create the config and install the Playwright agents.\n',
+        'No Playwright setup found. Re-run `ai-e2e playwright-init --yes` and the selected coding CLI will inspect the repository, install the appropriate package, and create the config.\n',
       );
       return 0;
     }
@@ -470,7 +470,7 @@ async function cmdPlaywrightInit(args: string[], io: CliIO): Promise<number> {
     secretEnvNames: [],
     interactive: true,
   });
-  io.out(`Starting ${provider.displayName} to set up Playwright and its agents.\n`);
+  io.out(`Starting ${provider.displayName} to set up Playwright.\n`);
   const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
     cwd: root,
     interactive: true,
@@ -479,7 +479,7 @@ async function cmdPlaywrightInit(args: string[], io: CliIO): Promise<number> {
   if (result.exitCode !== 0) return 1;
   const after = await detectPlaywright(root, config);
   if (!after.found) throw new AiE2eError('The coding CLI completed without creating a detectable Playwright setup.');
-  io.out(`Playwright setup verified (${after.configPath ?? after.dependency}); planner and generator setup was delegated to ${provider.displayName}.\n`);
+  io.out(`Playwright setup verified (${after.configPath ?? after.dependency}).\n`);
   return 0;
 }
 
