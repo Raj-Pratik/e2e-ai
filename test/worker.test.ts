@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import { analyzeOutgoing } from '../src/changes.js';
 import { loadConfig, stateDirPath } from '../src/config.js';
@@ -8,7 +9,9 @@ import { JobStore } from '../src/jobs.js';
 import { startJob } from '../src/launcher.js';
 import { parsePrePushInput } from '../src/refs.js';
 import { runJob } from '../src/worker.js';
-import { commit, createRepo, fakeProviderConfig, git, tmpDir, writeConfig } from './helpers.js';
+import { run } from '../src/commands.js';
+import { installHook } from '../src/hookInstall.js';
+import { captureIO, CLI, commit, createRepo, fakeProviderConfig, git, tmpDir, writeConfig } from './helpers.js';
 
 const logs: string[] = [];
 const log = (line: string): void => {
@@ -45,7 +48,7 @@ describe('background worker job execution', () => {
     const job = await runJob({ repoRoot: root, jobId, log });
     assert.equal(job.status, 'succeeded', job.error);
     assert.deepEqual(job.generatedFiles, ['e2e/generated-feature.spec.ts']);
-    assert.match(job.summary ?? '', /npx playwright test e2e\/generated-feature.spec.ts/);
+    assert.match(job.summary ?? '', /Run them with: .*e2e\/generated-feature.spec.ts/);
     assert.equal(git(root, 'status', '--porcelain', '--', 'e2e').trim(), '?? e2e/generated-feature.spec.ts');
     assert.equal(git(root, 'diff', '--cached', '--name-only').trim(), '');
     assert.ok(store.read(jobId)?.finishedAt);
@@ -104,11 +107,11 @@ describe('background worker job execution', () => {
     assert.ok(job.warnings.some((w) => /src\/agent-touched\.ts/.test(w)));
   });
 
-  it('skips with guidance when the repository has no Playwright setup', async () => {
+  it('blocks with guidance when the repository has no Playwright setup', async () => {
     const { root, jobId } = await prepare({ playwright: false });
     const job = await runJob({ repoRoot: root, jobId, log });
-    assert.equal(job.status, 'skipped');
-    assert.match(job.summary ?? '', /ai-e2e playwright-init --yes/);
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /pushpilot playwright-init --yes/);
   });
 
   it('does not use Playwright MCP during generation', async () => {
@@ -151,7 +154,7 @@ describe('background worker job execution', () => {
     const command = [
       process.execPath,
       '-e',
-      `const fs=require('node:fs'); const marker=${JSON.stringify(marker)}; if (fs.existsSync(marker)) process.exit(0); fs.writeFileSync(marker, 'failed once'); process.exit(1);`,
+      `const fs=require('node:fs'); const marker=${JSON.stringify(marker)}; if (fs.existsSync(marker)) { console.log('1 passed'); process.exit(0); } fs.writeFileSync(marker, 'failed once'); process.exit(1);`,
     ];
     const config = fakeProviderConfig({ playwright: { runGeneratedTests: true, testCommand: command } });
     const { root, jobId } = await prepare({ config });
@@ -177,5 +180,86 @@ describe('background worker job execution', () => {
     const job = await runJob({ repoRoot: root, jobId, log });
     assert.equal(job.status, 'skipped');
     assert.match(job.summary ?? '', /docs only/);
+  });
+
+  it('patches existing coverage without requiring a new spec', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ generation: { allowModifyExistingTests: true } }) });
+    process.env.FAKE_TARGET = 'home.spec.ts';
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.deepEqual(job.generatedFiles, ['e2e/home.spec.ts']);
+    assert.equal(job.testRun?.passed, true);
+    assert.match(git(root, 'diff', '--', 'e2e/home.spec.ts'), /generated/);
+  });
+
+  it('rejects a zero exit with no executed tests', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ playwright: { testCommand: [process.execPath, '-e', 'process.exit(0)'] } }) });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.equal(job.testRun?.passed, false);
+    assert.match(job.testRun?.failureOutput ?? '', /No positive passed-test count/);
+  });
+
+  it('fails when no runner is installed even if the provider writes tests', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ playwright: { testCommand: null } }) });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /No runnable Playwright command/);
+  });
+
+  it('refuses mixed passed and skipped coverage', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ playwright: { testCommand: [process.execPath, '-e', 'console.log("1 passed, 1 skipped")'] } }) });
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.equal(job.testRun?.passed, false);
+  });
+
+  it('blocks on unrelated agent edits without overwriting them', async () => {
+    const { root, jobId } = await prepare();
+    process.env.FAKE_MODE = 'outside';
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /outside allowed test source files/);
+    assert.equal(fs.readFileSync(path.join(root, 'src/agent-touched.ts'), 'utf8'), 'export {};\n');
+    assert.equal(git(root, 'diff', '--cached', '--name-only').trim(), '');
+  });
+
+  it('requires human review before committing a verified run', async () => {
+    const { root, jobId } = await prepare({ config: fakeProviderConfig({ generation: { commitGeneratedTests: true } }) });
+    const head = git(root, 'rev-parse', 'HEAD');
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'failed');
+    assert.match(job.error ?? '', /human review/);
+    assert.equal(git(root, 'rev-parse', 'HEAD'), head);
+    assert.ok(fs.existsSync(path.join(root, 'e2e/generated-feature.spec.ts')));
+  });
+
+  it('commits only reviewed tests and publishes the pinned commit through the normal hook', async () => {
+    const { root, store, jobId } = await prepare({ config: fakeProviderConfig({ generation: { commitGeneratedTests: true } }) });
+    store.update(jobId, { source: 'manual' });
+    const expected = git(root, 'rev-parse', 'HEAD').trim();
+    git(root, 'push', '-q', 'origin', 'main');
+    const job = await runJob({
+      repoRoot: root, jobId, log,
+      openReviewTerminal: () => {
+        const input = new PassThrough(), output = new PassThrough();
+        output.on('data', (chunk: Buffer) => {
+          if (chunk.toString().includes('approved committing')) setImmediate(() => input.write('yes\n'));
+        });
+        return { input, output, close: () => input.destroy() };
+      },
+    });
+    assert.equal(job.status, 'succeeded', job.error);
+    assert.ok(job.generatedCommit);
+    assert.equal(git(root, 'diff-tree', '--no-commit-id', '--name-only', '-r', job.generatedCommit!).trim(), 'e2e/generated-feature.spec.ts');
+    await installHook(root, CLI, path.join(store.stateDir, 'backups'), false);
+    fs.appendFileSync(path.join(root, '.git/info/exclude'), '\n.ai-e2e/\n');
+    // New unrelated HEAD must never be published by the follow-up command.
+    commit(root, { 'src/later.ts': 'export const later = true;\n' }, 'later unrelated work');
+    const io = captureIO(root);
+    assert.equal(await run(['publish-after-push', '--remote', 'origin', '--branch', 'main', '--expected', expected, '--commit', job.generatedCommit!], io), 0, io.stderr());
+    const remote = git(root, 'remote', 'get-url', 'origin').trim();
+    assert.equal(git(remote, 'rev-parse', 'main').trim(), job.generatedCommit);
+    assert.notEqual(git(root, 'rev-parse', 'HEAD').trim(), job.generatedCommit);
   });
 });

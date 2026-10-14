@@ -31,6 +31,7 @@ export interface JobRecord {
   proposedPatches: string[];
   warnings: string[];
   testRun?: TestRunResult;
+  generatedCommit?: string;
 }
 
 const JOB_ID = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$/;

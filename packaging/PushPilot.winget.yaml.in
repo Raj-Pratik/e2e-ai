@@ -1,0 +1,19 @@
+# Template only: reserve/confirm the identifier before submission to winget-pkgs.
+PackageIdentifier: RajPratik.PushPilot
+PackageVersion: '@VERSION@'
+PackageName: PushPilot
+Publisher: Raj Pratik
+License: MIT
+ShortDescription: Approved Playwright coverage for outgoing Git changes
+PackageUrl: https://github.com/Raj-Pratik/e2e-ai
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: pushpilot-@VERSION@-win32-x64\pushpilot.cmd
+        PortableCommandAlias: pushpilot
+    InstallerUrl: '@BASE_URL@/pushpilot-@VERSION@-win32-x64.zip'
+    InstallerSha256: '@WIN32_X64_SHA256@'
+ManifestType: singleton
+ManifestVersion: 1.9.0

@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { after } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,11 +14,16 @@ fs.chmodSync(FAKE_PROVIDER, 0o755);
 // Code under test reads process.env directly; keep it away from the developer's Git config.
 process.env.GIT_CONFIG_GLOBAL = os.devNull;
 process.env.GIT_CONFIG_NOSYSTEM = '1';
+process.env.GIT_CEILING_DIRECTORIES = path.resolve(here, '../../.test-work');
 process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`;
 for (const key of Object.keys(process.env)) if (key.startsWith('AI_E2E_') || key.startsWith('FAKE_')) delete process.env[key];
 
 export function tmpDir(prefix = 'ai-e2e-test-'): string {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const base = path.resolve(here, '../../.test-work');
+  fs.mkdirSync(base, { recursive: true });
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(base, prefix)));
+  after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
 }
 
 /** Environment isolated from the developer's global Git config and from hook variables. */
@@ -32,6 +38,7 @@ export function testEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CEILING_DIRECTORIES: path.resolve(here, '../../.test-work'),
     GIT_TERMINAL_PROMPT: '0',
     ...extra,
   };
@@ -101,9 +108,9 @@ export function fakeProviderConfig(extra: Record<string, unknown> = {}): Record<
     provider: 'copilot',
     providers: { copilot: { command: FAKE_PROVIDER } },
     prompt: { timeoutSeconds: 2 },
-    generation: { interactive: false, commitGeneratedTests: false },
-    playwright: { testCommand: [process.execPath, '-e', 'process.exit(0)'] },
+    playwright: { testCommand: [process.execPath, '-e', 'console.log("1 passed")'] },
     ...extra,
+    generation: { interactive: false, commitGeneratedTests: false, allowModifyExistingTests: false, ...(extra.generation as object ?? {}) },
   };
 }
 

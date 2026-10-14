@@ -12,10 +12,21 @@ describe('CLI parsing', () => {
   it('prints help and version', async () => {
     const io = captureIO(tmpDir());
     assert.equal(await run(['help'], io), 0);
-    assert.match(io.stdout(), /Usage: ai-e2e <command>/);
+    assert.match(io.stdout(), /Usage: pushpilot <command>/);
     const v = captureIO(tmpDir());
     assert.equal(await run(['--version'], v), 0);
     assert.match(v.stdout(), /^\d+\.\d+\.\d+/);
+  });
+
+  it('provides command-specific help without entering a repository', async () => {
+    const io = captureIO(tmpDir());
+    assert.equal(await run(['generate', '--help'], io), 0);
+    assert.match(io.stdout(), /--base: upstream/);
+    assert.doesNotMatch(io.stdout(), /Commands:/);
+    const init = captureIO(tmpDir());
+    assert.equal(await run(['help', 'init'], init), 0);
+    assert.match(init.stdout(), /--no-hook/);
+    assert.equal(await run(['help', 'unknown'], captureIO(tmpDir())), 2);
   });
 
   it('rejects unknown commands and options with exit code 2', async () => {
@@ -126,7 +137,7 @@ describe('pre-push hook handler', () => {
     });
     assert.equal(outcome, 'declined');
     assert.equal(launched, false);
-    assert.match(out, /ai-e2e: skipped\./);
+    assert.match(out, /PushPilot: skipped\./);
   });
 
   it('declines when no terminal is available', async () => {
@@ -192,7 +203,7 @@ describe('pre-push hook handler', () => {
     assert.equal(outcome, 'nothing-to-push');
   });
 
-  it('does not prompt again when only ai-e2e generated test commits are pushed', async () => {
+  it('does not trust a generated-commit trailer without a local verified receipt', async () => {
     const repo = createRepo();
     writeConfig(repo.root, fakeProviderConfig());
     const remoteSha = git(repo.root, 'rev-parse', 'origin/main').trim();
@@ -210,11 +221,11 @@ describe('pre-push hook handler', () => {
       write: () => undefined,
       openTty: () => {
         prompted = true;
-        return fakeTty('y\n')();
+        return fakeTty('n\n')();
       },
     });
-    assert.equal(outcome, 'no-relevant-changes');
-    assert.equal(prompted, false);
+    assert.equal(outcome, 'declined');
+    assert.equal(prompted, true);
   });
 
   it('hook command blocks on malformed input', async () => {

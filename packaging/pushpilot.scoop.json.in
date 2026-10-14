@@ -1,0 +1,14 @@
+{
+  "version": "@VERSION@",
+  "description": "Approved Playwright coverage for outgoing Git changes",
+  "homepage": "https://github.com/Raj-Pratik/e2e-ai",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "@BASE_URL@/pushpilot-@VERSION@-win32-x64.zip",
+      "hash": "@WIN32_X64_SHA256@",
+      "extract_dir": "pushpilot-@VERSION@-win32-x64"
+    }
+  },
+  "bin": "pushpilot.cmd"
+}

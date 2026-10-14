@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { JobStore, type JobRecord } from '../src/jobs.js';
-import { CLI, commit, createRepo, fakeProviderConfig, git, runDetached, testEnv, tmpDir, waitFor, write, writeConfig } from './helpers.js';
+import { CLI, commit, createRepo, fakeProviderConfig, git, runDetached, testEnv, tmpDir, write, writeConfig } from './helpers.js';
 
 /** End-to-end: real `git push` through the installed hook into a bare remote. */
 async function setup(options: { existingHook?: string } = {}) {
@@ -18,7 +18,6 @@ async function setup(options: { existingHook?: string } = {}) {
   git(repo.root, 'commit', '-q', '-m', 'ai-e2e config');
   git(repo.root, 'push', '-q', '--no-verify', 'origin', 'main');
   commit(repo.root, { 'src/orders.ts': 'export const orders = () => [];\n' }, 'orders page');
-  write(repo.root, 'src/wip.ts', 'developer work in progress\n');
   return repo;
 }
 
@@ -39,7 +38,7 @@ describe('git push integration', () => {
     const repo = await setup();
     const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'no' }));
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stderr, /ai-e2e: skipped\./);
+    assert.match(result.stderr, /PushPilot: skipped\./);
     assert.equal(jobs(repo.root).length, 0);
   });
 
@@ -54,25 +53,20 @@ describe('git push integration', () => {
     const done = jobs(repo.root).find((j) => j.status === 'succeeded');
     assert.ok(done, 'job succeeded before push returned');
     assert.deepEqual(done.generatedFiles, ['e2e/generated-feature.spec.ts']);
-    assert.equal(fs.readFileSync(path.join(repo.root, 'src/wip.ts'), 'utf8'), 'developer work in progress\n');
     assert.equal(git(repo.root, 'diff', '--cached', '--name-only').trim(), '');
     assert.match(fs.readFileSync(new JobStore(path.join(repo.root, '.ai-e2e')).logFile(done.id), 'utf8'), /\[copilot\] leaked token \[REDACTED\]/);
   });
 
-  it('accepting with commits enabled commits the tests with the job trailer and auto-pushes them', async () => {
+  it('preserves unrelated dirty changes and blocks automated commits and pushing', async () => {
     const repo = await setup();
     writeConfig(repo.root, fakeProviderConfig({ generation: { interactive: false, commitGeneratedTests: true } }));
+    write(repo.root, 'src/wip.ts', 'developer work in progress\n');
+    const before = remoteHead(repo.remote);
     const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
-    assert.equal(result.code, 0, result.stderr);
-    const head = git(repo.root, 'rev-parse', 'HEAD').trim();
-    assert.match(git(repo.root, 'log', '-1', '--format=%B'), /AI-E2E-Job: /);
-    // The follow-up push runs detached after the original push lands.
-    await waitFor(() => (remoteHead(repo.remote) === head ? true : undefined), 90_000, 'generated test commit pushed');
-
-    // Pushing only the generated commit again must not re-prompt.
-    const again = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
-    assert.equal(again.code, 0, again.stderr);
-    assert.equal(jobs(repo.root).length, 1);
+    assert.notEqual(result.code, 0);
+    assert.equal(remoteHead(repo.remote), before);
+    assert.match(result.stderr, /Working tree must be clean/);
+    assert.equal(fs.readFileSync(path.join(repo.root, 'src/wip.ts'), 'utf8'), 'developer work in progress\n');
   });
 
   it('a failing worker blocks the push', async () => {
@@ -136,7 +130,7 @@ describe('git push integration', () => {
     const repo = await setup();
     const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_SKIP: '1', AI_E2E_ASSUME: 'yes' }));
     assert.equal(result.code, 0);
-    assert.doesNotMatch(result.stderr, /ai-e2e:/);
+    assert.doesNotMatch(result.stderr, /PushPilot:/);
     assert.equal(jobs(repo.root).length, 0);
   });
 });

@@ -3,18 +3,22 @@ export function buildPlaywrightSetupTask(providerId = 'copilot'): string {
 
 Inspect the repository first and make only the setup changes required:
 
-1. If Playwright is not configured, choose the repository-appropriate package manager and install
+1. Inspect the language and frameworks (including Python, JavaScript, TypeScript and mixed repositories).
+   For Python use pytest-playwright in the project's virtual environment; preserve pytest fixtures and configuration.
+   Record the actual argv command (for example [".venv/bin/python","-m","pytest"]) and testDir in
+   .ai-e2e.json under playwright.testCommand and playwright.testDir, preserving other settings.
+   For JavaScript/TypeScript, if Playwright is not configured, choose the repository-appropriate package manager and install
    the required Playwright test package, then create a working playwright.config file and test
    directory. Preserve the project's existing conventions.
 2. Make sure \`npx playwright test\` can run locally: install the browsers needed by the config
    (\`npx playwright install\`), and configure \`webServer\` and any auth/setup project if the app needs them.
    Do not install Playwright agent definitions or Playwright MCP; the coding CLI writes and runs tests itself.
-3. ${providerId === 'copilot' ? 'If the Copilot skills plugin is not already installed, run:' : 'If the repository has coding-agent skills configured, load them; do not install a Copilot plugin when Copilot is not the selected provider.'}
-${providerId === 'copilot' ? `   copilot plugin marketplace add mattpocock/skills
-   copilot plugin install mattpocock-skills@mattpocock` : ''}
-   Use the available skills when deciding how to plan, generate, diagnose, and repair E2E tests.
-4. Verify the resulting Playwright configuration by listing tests (\`npx playwright test --list\`). Do not generate feature tests
-   during this setup task.
+3. Use the main ${providerId} coding CLI only; do not install plugins, agents or MCP.
+4. Run an actual browser smoke test against the local application, not merely --list or --collect-only.
+   Add a minimal smoke test if none exists, and fix setup until it passes. Never use skipped tests as proof.
+   For Python install browsers with the environment's python -m playwright install and run python -m pytest.
+   Ask for approval before dependencies or server startup. Report missing credentials or environment as blockers.
+   Never claim success unless at least one real test passed. Exit the coding CLI after reporting the exact command and result.
 
 You may install or update development dependencies required for this setup. Do not modify
 application behaviour, production dependencies, or unrelated files. Report every file and

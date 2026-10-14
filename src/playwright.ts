@@ -13,8 +13,9 @@ export const CONFIG_CANDIDATES = [
   'playwright.config.cjs',
 ];
 
-const TEST_FILE = /\.(spec|test)\.[cm]?[jt]sx?$/;
-const SOURCE_FILE = /\.[cm]?[jt]sx?$/;
+const TEST_FILE = /(?:\.(spec|test)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]+\.py$|_test\.py$)/;
+const SOURCE_FILE = /(?:\.[cm]?[jt]sx?|\.py)$/;
+export const isTestFile = (file: string): boolean => TEST_FILE.test(file);
 
 export interface PlaywrightSetup {
   found: boolean;
@@ -28,6 +29,16 @@ export interface PlaywrightSetup {
   testFiles: string[];
   supportFiles: string[];
   testSuffix: string;
+  runner?: 'javascript' | 'pytest';
+}
+
+export function testCommand(root: string, config: Config, setup: PlaywrightSetup, specs: string[]): string[] | null {
+  if (config.playwright.testCommand) return [...config.playwright.testCommand, ...specs];
+  if (setup.runner === 'pytest') {
+    const python = path.join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+    return [fs.existsSync(python) ? python : process.platform === 'win32' ? 'python' : 'python3', '-m', 'pytest', ...specs];
+  }
+  return setup.cliPath ? [process.execPath, setup.cliPath, 'test', '--reporter=line', ...(config.playwright.configPath ? ['--config', config.playwright.configPath] : []), ...specs] : null;
 }
 
 const toPosix = (p: string): string => p.split(path.sep).join('/');
@@ -76,11 +87,16 @@ export async function detectPlaywright(root: string, config: Config): Promise<Pl
     : (CONFIG_CANDIDATES.find((c) => fs.existsSync(path.join(root, c))) ?? null);
 
   const pkg = readPackageJson(root);
+  const pythonPlaywright = ['pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'Pipfile', 'uv.lock']
+    .some((file) => {
+      try { return /pytest-playwright|pytest_playwright/.test(fs.readFileSync(path.join(root, file), 'utf8')); } catch { return false; }
+    });
   const deps = { ...stringRecord(pkg?.dependencies), ...stringRecord(pkg?.devDependencies) };
-  const dependency = ['@playwright/test', 'playwright'].find((d) => d in deps) ?? null;
+  const dependency = ['@playwright/test', 'playwright'].find((d) => d in deps) ?? (pythonPlaywright ? 'pytest-playwright' : null);
+  const runner = !configPath && dependency === 'pytest-playwright' ? 'pytest' : 'javascript';
   const scripts = Object.fromEntries(Object.entries(stringRecord(pkg?.scripts)).filter(([, cmd]) => /playwright/.test(cmd)));
 
-  let testDir = '.';
+  let testDir = runner === 'pytest' ? 'tests' : '.';
   let testDirSource: PlaywrightSetup['testDirSource'] = 'default';
   if (config.playwright.testDir) {
     testDir = normalizeRelative(root, root, config.playwright.testDir);
@@ -117,7 +133,8 @@ export async function detectPlaywright(root: string, config: Config): Promise<Pl
     scripts,
     testFiles,
     supportFiles,
-    testSuffix: inferSuffix(testFiles),
+    testSuffix: runner === 'pytest' ? '.py (test_*.py or *_test.py)' : inferSuffix(testFiles),
+    runner,
   };
 }
 

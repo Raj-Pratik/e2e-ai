@@ -76,6 +76,9 @@ export function runProcess(command, args, options) {
             }
             if (interactiveFd !== undefined) {
                 try {
+                    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+                        throw new Error('Windows .cmd/.bat provider shims are unsupported. Configure a native .exe coding CLI or an explicit interpreter executable.');
+                    }
                     fs.closeSync(interactiveFd);
                 }
                 catch {
@@ -105,8 +108,12 @@ export function runProcess(command, args, options) {
             resolve(result);
         };
         const sendSignal = (sig) => {
-            if (!child || child.exitCode !== null || child.signalCode !== null)
+            if (!child)
                 return;
+            if (process.platform === 'win32' && child.pid) {
+                spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+                return;
+            }
             try {
                 if (useGroup && child.pid)
                     process.kill(-child.pid, sig);
@@ -118,6 +125,8 @@ export function runProcess(command, args, options) {
             }
         };
         function terminate() {
+            if (killTimer)
+                return;
             sendSignal('SIGTERM');
             killTimer = setTimeout(() => sendSignal('SIGKILL'), KILL_GRACE_MS);
             killTimer.unref();

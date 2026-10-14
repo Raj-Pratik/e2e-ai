@@ -9,7 +9,7 @@ export function defaultProviderSettings() {
         fallbackModels: [],
         extraArgs: [],
         allowUnsafeArgs: false,
-        allowedShellCommands: ['node', 'npm', 'npx'],
+        allowedShellCommands: ['node', 'npm', 'npx', 'python', 'python3', 'pytest', 'uv'],
         maxTurns: null,
     };
 }
@@ -18,19 +18,19 @@ export function defaultConfig() {
         enabled: true,
         provider: 'copilot',
         providers: {
-            copilot: { ...defaultProviderSettings(), model: 'gpt-6-luna', fallbackModels: ['gpt-5.6-terra'] },
-            claude: { ...defaultProviderSettings(), model: 'claude-haiku-5.5', fallbackModels: ['claude-sonnet-5.5'] },
+            copilot: defaultProviderSettings(),
+            claude: defaultProviderSettings(),
         },
         prompt: { timeoutSeconds: 60 },
         generation: {
             timeoutSeconds: 900,
             maxOutputBytes: 1024 * 1024,
-            allowModifyExistingTests: false,
+            allowModifyExistingTests: true,
             outputDir: null,
             interactive: true,
             commitGeneratedTests: true,
         },
-        playwright: { configPath: null, testDir: null, runGeneratedTests: false, testCommand: null, testTimeoutSeconds: 600 },
+        playwright: { configPath: null, testDir: null, runGeneratedTests: true, testCommand: null, testTimeoutSeconds: 600 },
         mcp: { playwright: { enabled: false, command: 'npx', args: ['@playwright/mcp@latest'], baseUrl: null } },
         context: {
             maxFiles: 60,
@@ -237,7 +237,7 @@ export function starterConfig() {
     return {
         enabled: true,
         provider: 'copilot',
-        playwright: { runGeneratedTests: false },
+        playwright: { runGeneratedTests: true },
         mcp: { playwright: { enabled: false } },
         context: { exclude: [] },
     };

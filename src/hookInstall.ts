@@ -39,23 +39,31 @@ export function cliReference(root: string, cliPath: string): string {
 export function hookBlock(cliRef: string): string {
   return [
     BLOCK_START,
-    '# Interactive AI E2E test generation. Accepted workflows block the push. Set AI_E2E_SKIP=1 to bypass.',
-    'if [ -z "${AI_E2E_SKIP:-}" ] && command -v node >/dev/null 2>&1; then',
+    '# PushPilot pre-push workflow. Answer no to continue without generation.',
+    'if [ -z "${AI_E2E_SKIP:-}" ]; then',
     '  ai_e2e_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"',
-    '  ai_e2e_cli="$(command -v ai-e2e 2>/dev/null || true)"',
+    '  ai_e2e_cli="$(command -v pushpilot 2>/dev/null || command -v ai-e2e 2>/dev/null || true)"',
+    `  ai_e2e_node=${shellQuote(process.execPath.replace(/\\/g, '/'))}`,
     '  # Version-manager shims (asdf, nvm) can resolve to a non-working binary; fall back to the recorded path.',
     '  if [ -n "$ai_e2e_cli" ] && ! "$ai_e2e_cli" --version >/dev/null 2>&1; then ai_e2e_cli=""; fi',
     '  ai_e2e_from_path=0',
     '  if [ -n "$ai_e2e_cli" ]; then ai_e2e_from_path=1; else ai_e2e_cli=' + cliRef + '; fi',
-    '  if [ -f "$ai_e2e_cli" ] && ai_e2e_refs="$(mktemp "${TMPDIR:-/tmp}/ai-e2e-refs.XXXXXX" 2>/dev/null)"; then',
-    '    cat > "$ai_e2e_refs" || true',
-    '    if [ "$ai_e2e_from_path" -eq 1 ]; then "$ai_e2e_cli" hook pre-push "$@" < "$ai_e2e_refs"; else node "$ai_e2e_cli" hook pre-push "$@" < "$ai_e2e_refs"; fi',
+    '  ai_e2e_refs_dir="$ai_e2e_root/.ai-e2e/hook-$$"',
+    '  mkdir -p "$ai_e2e_root/.ai-e2e"',
+    '  if [ -f "$ai_e2e_cli" ] && mkdir "$ai_e2e_refs_dir"; then',
+    '    ai_e2e_refs="$ai_e2e_refs_dir/refs"',
+    '    cat > "$ai_e2e_refs" || { echo "PushPilot: cannot capture refs; push blocked." >&2; exit 1; }',
+    '    if [ "$ai_e2e_from_path" -eq 1 ]; then "$ai_e2e_cli" hook pre-push "$@" < "$ai_e2e_refs"; else "$ai_e2e_node" "$ai_e2e_cli" hook pre-push "$@" < "$ai_e2e_refs"; fi',
     '    ai_e2e_status=$?',
     '    exec 0< "$ai_e2e_refs"',
     '    rm -f "$ai_e2e_refs" 2>/dev/null || true',
+    '    rmdir "$ai_e2e_refs_dir" 2>/dev/null || true',
     '    if [ "$ai_e2e_status" -ne 0 ]; then exit "$ai_e2e_status"; fi',
     '  elif [ ! -f "$ai_e2e_cli" ]; then',
-    '    echo "ai-e2e: CLI not found at $ai_e2e_cli (run the ai-e2e build); skipping." >&2',
+    '    echo "PushPilot: CLI not found at $ai_e2e_cli (reinstall PushPilot); skipping." >&2',
+    '  else',
+    '    echo "PushPilot: cannot create hook state; push blocked." >&2',
+    '    exit 1',
     '  fi',
     '  unset ai_e2e_root ai_e2e_cli ai_e2e_refs ai_e2e_from_path',
     'fi',
@@ -193,6 +201,6 @@ export async function ensureGitignored(root: string, stateDir: string): Promise<
   const file = path.join(root, '.gitignore');
   const current = readIfExists(file) ?? '';
   const prefix = current === '' || current.endsWith('\n') ? '' : '\n';
-  fs.appendFileSync(file, `${prefix}# ai-e2e runtime state (jobs, logs)\n/${rel}/\n`);
+  fs.appendFileSync(file, `${prefix}# PushPilot runtime state (jobs, logs)\n/${rel}/\n`);
   return 'added';
 }

@@ -81,37 +81,40 @@ Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwri
 \`playwright-test-healer\` or Playwright MCP. You have the repository, the shell and this task file; that is enough.
 
 1. **Analyze.** Read the outgoing commits and diffs below. Decide whether the change affects user-visible product
-   behaviour. Documentation, Docker/Kubernetes, CI/CD, package metadata, unit-test-only, generated output and
-   config-only changes need no E2E test: write the completion file with \`"not-needed"\` (see below) and stop.
+   behaviour. Do not assume configuration or dependency changes are harmless: evaluate their product impact.
+   If no browser coverage is needed, write the completion file with \`"not-needed"\` and a concrete reason.
 2. **Plan.** Read the changed source, related components and existing E2E tests/helpers. Write the test plan to
-   \`${jobRel}/plan.md\` as a readable spec: files to create, each scenario with its user steps and assertions,
+   \`${jobRel}/plan.md\` as a readable spec: files to create OR patch, each scenario with its user steps and assertions,
    fixtures/auth/data used, and the command you will run. Show the same plan in this terminal.
    Ask questions only when the answer changes the plan (critical path, expected assertion, test data/role,
    environment). Use short multiple-choice questions with an "Other" option. Never ask "why" questions.
 3. **Approval gate (never skip).** Ask the user to approve or revise the plan. Do not write any spec or helper until
    the user explicitly approves. If they ask for changes, update \`plan.md\` and ask again.
 4. **Generate.** Write the approved tests yourself, following the plan exactly.
-5. **Run and fix loop.** Run only the new specs with the repository's Playwright command (for example
+5. **Run and fix loop.** Run the added or patched specs and relevant existing coverage with the repository's Playwright command (for example
    \`npx playwright test <spec paths>\` or the matching package script). The Playwright config starts the web
-   server and runs auth/setup projects automatically. Read the failure output, error context, traces and reports;
-   fix the generated specs/helpers; rerun. Repeat until every new spec passes. Ask the user only when you genuinely
-   need input (credentials, environment, a product question). Never stop while tests are failing.
-6. **Finish.** When the new specs pass, write the completion file. ai-e2e then closes this session, re-runs the
+   server if configured; otherwise ask permission to start the required local server and clean it up afterwards.
+   For Python use the configured environment's python -m pytest command with pytest-playwright.
+   Read failure output, error context, traces and reports; fix the approved tests/helpers; rerun.
+   Repeat until all relevant tests pass, cancellation, the job deadline, or a genuine actionable blocker.
+   Ask for missing inputs; never invent credentials or hide failures.
+6. **Finish.** When the relevant specs pass, write the completion file. PushPilot then closes this session, re-runs the
    specs, commits them and pushes.
 
 ## Rules
-- Create NEW Playwright test files only, under \`${out}/\`. Use the \`${setup.testSuffix}\` suffix and follow existing naming and folder conventions.
-- Do NOT modify, rename or delete existing files: application source, existing tests, fixtures, configuration, package manifests, lockfiles, CI files.
-  If an existing test or helper must change, describe the proposed patch in your final answer instead of editing it.
+- Add or patch Playwright tests and source helpers only under \`${out}/\`.
+  ${config.generation.allowModifyExistingTests ? 'Prefer patching existing coverage over duplication.' : 'Compatibility setting allowModifyExistingTests=false: propose existing-file patches instead of editing them.'}
+  Use the \`${setup.testSuffix}\` naming convention.
+- Do NOT modify application source, configuration, package manifests, lockfiles or CI files; do not rename or delete files.
   The only non-test files you may create are \`plan.md\` and the completion file in the job directory.
 - Do NOT run git commands that change state (commit, push, add, reset, checkout, stash). Do NOT install packages.
 - Do NOT read or reference secrets, credentials, \`.env\` files, auth storage-state files or private keys.
-- Do NOT contact production systems or perform destructive actions. Let the Playwright config start any local server.
+- Do NOT contact production systems or perform destructive actions. Ask permission for local server startup if needed.
 - Test user-visible behaviour introduced or changed by the diff below. Prefer accessible locators
   (\`getByRole\`, \`getByLabel\`, \`getByText\`, \`getByTestId\`) over CSS/XPath; never use fixed sleeps (\`waitForTimeout\`) —
   rely on web-first assertions and auto-waiting. Cover loading, error and important edge cases where relevant.
 - Reuse existing fixtures, page objects, auth setup and helpers listed below; do not duplicate existing coverage.
-- Keep tests deterministic and independent. Mark tests that need unavailable data or environments with \`test.skip\` and a reason.
+- Keep tests deterministic and independent. Unavailable data or environments are blockers, never reasons to skip tests.
 - Split independent scenarios into separate test files where practical, and put reusable setup/actions/assertions in
   existing common helpers or a new shared helper under the E2E test directory.
 
@@ -120,7 +123,7 @@ Never stop after writing tests. Keep the loop going — run the new specs, read 
 tests/helpers, rerun — until every new spec passes locally. Ask the user in this terminal only when you genuinely need
 their input (for example authentication or environment details), then continue the loop.
 When the new specs pass, write \`${jobRel}/${DONE_FILE}\` with
-\`{"status":"passed","specs":["<spec paths>"],"command":"<command you ran>"}\`. ai-e2e then closes this session
+\`{"status":"passed","specs":["<spec paths>"],"command":"<command you ran>"}\`. PushPilot then closes this session
 automatically, re-verifies the specs, commits them and pushes. Do not ask the user to exit or type /exit.
 If the change clearly needs no E2E test (non-product change), write \`{"status":"not-needed","reason":"<why>"}\`.
 If a blocker cannot be resolved even with the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\`.
@@ -173,7 +176,7 @@ ${fileLines.join('\n')}${excludedNote}
   const related = rankRelated(setup.testFiles, changedPaths, config.context.maxRelatedTests);
   const examples = related.length ? related : setup.testFiles.slice(0, Math.min(1, config.context.maxRelatedTests));
   if (examples.length) {
-    budget.add('## Related existing tests (style reference — do not edit)');
+    budget.add('## Related existing tests (read before deciding whether to patch or add coverage)');
     for (const file of examples) {
       const content = readSafe(repoRoot, file);
       if (content) budget.tryAdd(`test ${file}`, `### ${file}\n${fence(content, 'ts')}\n`);

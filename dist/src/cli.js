@@ -6,7 +6,7 @@ const isHook = argv[0] === 'hook';
 if (isHook) {
     // Hook failures are surfaced so a failed accepted test workflow can block the push.
     process.on('uncaughtException', (error) => {
-        process.stderr.write(`ai-e2e: failed (${error.message}). Push is blocked.\n`);
+        process.stderr.write(`PushPilot: failed (${error.message}). Push is blocked.\n`);
         process.exit(1);
     });
     process.on('unhandledRejection', () => process.exit(1));
@@ -18,6 +18,6 @@ run(argv, { out: (t) => process.stdout.write(t), err: (t) => process.stderr.writ
     if (isHook)
         setTimeout(() => process.exit(0), 2000).unref();
 }, (error) => {
-    process.stderr.write(`ai-e2e: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`PushPilot: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = isHook ? 0 : 1;
 });

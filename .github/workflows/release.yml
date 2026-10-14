@@ -1,0 +1,53 @@
+name: Release validation and bundles
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.20.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run release:check
+      - run: npm test
+        if: runner.os != 'Windows'
+      - run: npm run build
+        if: runner.os == 'Windows'
+      - name: Bundle exact installed Node runtime with its license
+        shell: bash
+        run: |
+          mkdir -p release
+          curl --fail --location https://raw.githubusercontent.com/nodejs/node/v22.20.0/LICENSE -o release/NODE-LICENSE
+          NODE_LICENSE=release/NODE-LICENSE npm run release:bundle
+      - name: Smoke-test packaged entry point
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bundle="$(find release -maxdepth 1 -type d -name 'pushpilot-*' | head -1)"
+          "$bundle/pushpilot" --version
+      - name: Smoke-test Windows launcher
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem release -Directory -Filter 'pushpilot-*' | Select-Object -First 1
+          & (Join-Path $bundle.FullName 'pushpilot.cmd') --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pushpilot-${{ matrix.os }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+            release/*.sha256
+          if-no-files-found: error

@@ -14,11 +14,17 @@ export const QUESTION = 'Would you like to generate E2E tests for these changes 
 
 /** True when every outgoing commit was created by ai-e2e itself (identified by its commit trailer). */
 async function onlyGeneratedTestCommits(root: string, refs: PushRef[]): Promise<boolean> {
+  const { config } = loadConfig(root);
+  const verified = new Set(new JobStore(stateDirPath(root, config)).list()
+    .filter((job) => job.status === 'succeeded' && job.testRun?.passed && job.generatedCommit)
+    .map((job) => job.generatedCommit));
   for (const ref of refs) {
     if (refKind(ref) !== 'update') return false;
     const out = await tryGit(root, ['log', '--format=%B%x00', `${ref.remoteSha}..${ref.localSha}`]);
     const bodies = out?.split('\0').map((b) => b.trim()).filter(Boolean);
     if (!bodies?.length || !bodies.every((body) => new RegExp(`^${GENERATED_TRAILER}: `, 'm').test(body))) return false;
+    const commits = (await tryGit(root, ['rev-list', `${ref.remoteSha}..${ref.localSha}`]))?.trim().split('\n');
+    if (!commits?.every((sha) => verified.has(sha))) return false;
   }
   return true;
 }
@@ -47,7 +53,7 @@ export type HookOutcome =
 
 /** pre-push entry point. Accepted generation failures block the push. */
 export async function runPrePushHook(params: HookParams): Promise<HookOutcome> {
-  const say = (msg: string): void => params.write(`ai-e2e: ${msg}\n`);
+  const say = (msg: string): void => params.write(`PushPilot: ${msg}\n`);
   try {
     if (params.env.AI_E2E_WORKER) return 'disabled';
     const root = await findRepoRoot(params.cwd);
@@ -57,7 +63,7 @@ export async function runPrePushHook(params: HookParams): Promise<HookOutcome> {
     const refs = parsePrePushInput(params.stdin).filter((r) => refKind(r) !== 'delete');
     if (!refs.length) return 'nothing-to-push';
     if (await onlyGeneratedTestCommits(root, refs)) {
-      say('only ai-e2e generated test commits are outgoing; no prompt needed.');
+      say('only verified PushPilot test commits are outgoing; no prompt needed.');
       return 'no-relevant-changes';
     }
 
@@ -68,7 +74,7 @@ export async function runPrePushHook(params: HookParams): Promise<HookOutcome> {
     } else {
       const tty = (params.openTty ?? openTerminal)();
       if (!tty) {
-        say('no interactive terminal; skipping test generation (run `ai-e2e generate` later if needed).');
+        say('no interactive terminal; skipping test generation (run `pushpilot generate` later if needed).');
         return 'no-terminal';
       }
       try {
@@ -106,7 +112,7 @@ export async function runPrePushHook(params: HookParams): Promise<HookOutcome> {
     switch (result.kind) {
       case 'duplicate':
         say(`a job for these changes already exists (${result.existing.id}, ${result.existing.status}); not starting another.`);
-        return 'duplicate';
+        return result.existing.status === 'succeeded' || result.existing.status === 'skipped' ? 'duplicate' : 'generation-failed';
       case 'launch-failed':
         say(`${result.error} Push is blocked.`);
         return 'launch-failed';

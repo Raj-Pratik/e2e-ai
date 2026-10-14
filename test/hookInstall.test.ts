@@ -84,7 +84,7 @@ describe('hook installation', () => {
     const { root } = createRepo();
     fs.writeFileSync(path.join(root, '.gitignore'), 'node_modules');
     assert.equal(await ensureGitignored(root, path.join(root, '.ai-e2e')), 'added');
-    assert.equal(fs.readFileSync(path.join(root, '.gitignore'), 'utf8'), 'node_modules\n# ai-e2e runtime state (jobs, logs)\n/.ai-e2e/\n');
+    assert.equal(fs.readFileSync(path.join(root, '.gitignore'), 'utf8'), 'node_modules\n# PushPilot runtime state (jobs, logs)\n/.ai-e2e/\n');
     assert.equal(await ensureGitignored(root, path.join(root, '.ai-e2e')), 'already-ignored');
   });
 });

@@ -11,8 +11,8 @@ describe('config', () => {
     assert.equal(loaded.exists, false);
     assert.equal(loaded.config.provider, 'copilot');
     assert.equal(loaded.config.mcp.playwright.enabled, false);
-    assert.equal(loaded.config.playwright.runGeneratedTests, false);
-    assert.equal(loaded.config.generation.allowModifyExistingTests, false);
+    assert.equal(loaded.config.playwright.runGeneratedTests, true);
+    assert.equal(loaded.config.generation.allowModifyExistingTests, true);
     assert.equal(loaded.config.jobs.duplicate, 'skip');
   });
 

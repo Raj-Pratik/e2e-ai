@@ -107,6 +107,9 @@ export function runProcess(command: string, args: readonly string[], options: Ru
       }
       if (interactiveFd !== undefined) {
         try {
+          if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+            throw new Error('Windows .cmd/.bat provider shims are unsupported. Configure a native .exe coding CLI or an explicit interpreter executable.');
+          }
           fs.closeSync(interactiveFd);
         } catch {
           // The child may already have closed the descriptor.
@@ -134,7 +137,11 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     };
 
     const sendSignal = (sig: NodeJS.Signals): void => {
-      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+      if (!child) return;
+      if (process.platform === 'win32' && child.pid) {
+        spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        return;
+      }
       try {
         if (useGroup && child.pid) process.kill(-child.pid, sig);
         else child.kill(sig);
@@ -144,6 +151,7 @@ export function runProcess(command: string, args: readonly string[], options: Ru
     };
 
     function terminate(): void {
+      if (killTimer) return;
       sendSignal('SIGTERM');
       killTimer = setTimeout(() => sendSignal('SIGKILL'), KILL_GRACE_MS);
       killTimer.unref();

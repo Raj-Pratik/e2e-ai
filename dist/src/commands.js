@@ -15,19 +15,19 @@ import { detectPlaywright } from './playwright.js';
 import { askChoice, openTerminal } from './prompt.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
-import { runJob } from './worker.js';
+import { runGeneratedTests, runJob } from './worker.js';
 export class UsageError extends AiE2eError {
 }
-export const HELP = `ai-e2e — optional AI-generated Playwright E2E tests for outgoing Git changes
+export const HELP = `PushPilot — approved, independently verified Playwright coverage for outgoing Git changes
 
-Usage: ai-e2e <command> [options]
+Usage: pushpilot <command> [options]
 
 Commands:
   init [--no-hook] [--force]          Create .ai-e2e.json, ignore runtime state, install the pre-push hook
   generate [--base <rev>] [--head <rev>] [--provider <id>] [--foreground] [--force]
                                       Generate tests for base..head (default: upstream..HEAD)
-  push [git push options and refs]           Generate, validate, commit, then safely push
-  publish-after-push --remote <name> --branch <name> --expected <sha>
+  push [git push options and refs]           Normal git push, using the installed pre-push hook
+  publish-after-push --remote <name> --branch <name> --expected <sha> --commit <sha>
                                       Internal guarded follow-up push for generated tests
   status [<job-id>] [--json] [--limit <n>]
                                       Show recent or specific generation jobs
@@ -36,13 +36,29 @@ Commands:
                                       Display or update configuration
   providers [--json]                  List AI providers and whether they are available
   playwright-init [--yes]             Explain (or, with --yes, let the coding CLI set up Playwright)
-  uninstall                           Remove the ai-e2e block from the pre-push hook
+  uninstall                           Remove the PushPilot block from the pre-push hook
   help                                Show this help
 
 Environment:
-  AI_E2E_SKIP=1          Skip the hook entirely for one push
   AI_E2E_ASSUME=yes|no  Answer the push prompt non-interactively (explicit opt-in; default: ask)
+
+  --help, -h           Help (also supported after every command)
+  --version, -v        Print version
 `;
+const COMMAND_HELP = {
+    init: 'pushpilot init [--no-hook] [--force]\nSelect provider (default Copilot), preserve config, install hook, and run verified Playwright setup.\n--no-hook: skip hook installation. --force: insert into a managed hook with backup; never overwrite config.',
+    generate: 'pushpilot generate [--base REV] [--head REV] [--provider ID] [--foreground] [--force]\n--base: upstream or origin merge-base by default. --head: HEAD by default.\n--provider: copilot or claude. --force: retry duplicate changes.\n--foreground: compatibility flag; jobs always run in this terminal.\nRequires a clean tree and runnable Playwright; plan approval and independent verification are mandatory.',
+    push: 'pushpilot push [git push arguments]\nRuns normal git push. Install the hook with pushpilot init first.\nAll remaining arguments (remote, refs, --force-with-lease, etc.) go to Git.',
+    status: 'pushpilot status [JOB] [--json] [--limit N]\nShow one job or recent jobs. --limit defaults to 10; --json emits machine-readable results.',
+    logs: 'pushpilot logs [JOB] [--tail N]\nPrint the latest or selected job log. --tail defaults to 200 lines.',
+    config: 'pushpilot config [show|get KEY|set KEY VALUE|validate|path]\nDotted keys address settings; VALUE is JSON or a string. Existing .ai-e2e.json is preserved.\nExample: pushpilot config set provider claude',
+    providers: 'pushpilot providers [--json]\nCheck installed Copilot and Claude CLIs, versions, and selected provider.',
+    'playwright-init': 'pushpilot playwright-init [--yes]\nWithout --yes, show guidance. --yes launches the main coding CLI to inspect JS/Python,\nconfigure Playwright, and run smoke tests; PushPilot independently reruns actual tests.',
+    uninstall: 'pushpilot uninstall\nRemove only the legacy-compatible hook block. Keep configuration, tests, state and unrelated hooks.',
+    worker: 'pushpilot worker --job ID\nInternal foreground worker. Requires an existing job; not a normal user command.',
+    hook: 'pushpilot hook pre-push REMOTE [URL]\nInternal Git hook entry point. Reads the standard pre-push ref list from stdin.',
+    'publish-after-push': 'pushpilot publish-after-push --remote NAME --branch NAME --expected SHA --commit SHA\nInternal bounded publisher. Waits for the original SHA, then pushes the pinned test commit through normal hooks.',
+};
 function parse(args, options) {
     try {
         const parsed = parseArgs({ args, options, strict: true, allowPositionals: true });
@@ -86,7 +102,7 @@ async function cmdInit(args, io) {
         const tty = openTerminal();
         if (tty) {
             try {
-                const selected = await askChoice('Which AI provider should ai-e2e use by default?', ['GitHub Copilot CLI', 'Claude Code CLI'], tty, 60_000);
+                const selected = await askChoice('Which AI provider should PushPilot use by default? (Enter: Copilot)', ['GitHub Copilot CLI', 'Claude Code CLI'], tty, 60_000);
                 if (selected === 'Claude Code CLI')
                     initial.provider = 'claude';
             }
@@ -95,7 +111,7 @@ async function cmdInit(args, io) {
             }
         }
         else {
-            io.out('No interactive terminal; defaulting to GitHub Copilot CLI. Use `ai-e2e config set provider claude` to switch.\n');
+            io.out('No interactive terminal; defaulting to GitHub Copilot CLI. Use `pushpilot config set provider claude` to switch.\n');
         }
         writeConfig(configFile, initial);
         io.out(`Config: created ${CONFIG_FILE} (commit it to share settings).\n`);
@@ -132,14 +148,14 @@ async function cmdInit(args, io) {
     const setup = await detectPlaywright(root, config);
     io.out(setup.found
         ? `Playwright: config ${setup.configPath ?? '(none)'}, tests in ${setup.testDir}, new tests go to ${setup.outputDir}.\n`
-        : 'Playwright: not detected. Run `ai-e2e playwright-init` for setup guidance; generation will be skipped until then.\n');
-    if (setup.found) {
-        io.out('Playwright MCP is configured for the selected provider. Run `ai-e2e playwright-init --yes` to install it locally.\n');
-    }
+        : 'Playwright: not detected. Interactive init will set it up; otherwise run `pushpilot playwright-init --yes` before generation.\n');
     const provider = getProvider(config.provider);
     const availability = await detectProvider(provider, config.providers[provider.id] ?? config.providers.copilot, root);
     io.out(`Provider: ${provider.displayName} — ${availability.available ? `available (${availability.version ?? 'unknown version'})` : availability.reason}\n`);
     io.out('Privacy: when you accept the prompt, outgoing diffs and related test files are sent to the selected AI provider.\n');
+    if (hasInteractiveTerminal())
+        return cmdPlaywrightInit(['--yes'], io);
+    io.out('Setup not verified: no interactive terminal. Run `pushpilot playwright-init --yes` in a terminal before accepting generation.\n');
     return 0;
 }
 async function resolveCommit(root, rev) {
@@ -232,7 +248,7 @@ async function cmdGenerate(args, io) {
             io.err(`${result.error}\n`);
             return 1;
         case 'started':
-            io.out(`Started background job ${result.job.id} (pid ${result.pid}).\nFollow with: ai-e2e logs ${result.job.id}\n`);
+            io.out(`Started background job ${result.job.id} (pid ${result.pid}).\nFollow with: pushpilot logs ${result.job.id}\n`);
             return 0;
         case 'created': {
             const logFile = store.logFile(result.job.id);
@@ -247,18 +263,13 @@ async function cmdGenerate(args, io) {
     }
 }
 async function cmdPush(args, io) {
-    const generationExit = await cmdGenerate(['--foreground', '--force'], io);
-    if (generationExit !== 0) {
-        io.err('ai-e2e: generation did not pass; nothing was pushed.\n');
-        return generationExit;
-    }
     if (!hasInteractiveTerminal())
-        throw new AiE2eError('ai-e2e push requires an interactive terminal for Git authentication and provider interaction.');
-    const pushArgs = args.length ? args : ['push'];
+        throw new AiE2eError('pushpilot push requires an interactive terminal for Git authentication and provider interaction.');
+    const pushArgs = ['push', ...args];
     io.out(`Running: git ${pushArgs.join(' ')}\n`);
     const result = await runProcess('git', pushArgs, {
         cwd: io.cwd,
-        env: { ...io.env, AI_E2E_SKIP: '1' },
+        env: io.env,
         interactive: true,
         onOutput: (chunk) => io.out(chunk),
     });
@@ -268,7 +279,7 @@ async function cmdPush(args, io) {
         io.err(`git push failed${result.stderr.trim() ? `: ${result.stderr.trim()}` : ` (exit code ${result.exitCode})`}.\n`);
         return 1;
     }
-    io.out('ai-e2e: generation passed, generated tests were committed, and the push completed.\n');
+    io.out('PushPilot: git push completed through the normal pre-push hook.\n');
     return 0;
 }
 async function cmdPublishAfterPush(args, io) {
@@ -276,34 +287,37 @@ async function cmdPublishAfterPush(args, io) {
         remote: { type: 'string' },
         branch: { type: 'string' },
         expected: { type: 'string' },
+        commit: { type: 'string' },
     });
     const remote = values.remote;
     const branch = values.branch;
     const expected = values.expected;
-    if (typeof remote !== 'string' || typeof branch !== 'string' || typeof expected !== 'string') {
-        throw new UsageError('publish-after-push requires --remote, --branch and --expected.');
+    const commit = values.commit;
+    if (typeof remote !== 'string' || typeof branch !== 'string' || typeof expected !== 'string' || typeof commit !== 'string' ||
+        remote.startsWith('-') || branch.startsWith('-') || !/^[a-f0-9]{40,64}$/.test(expected) || !/^[a-f0-9]{40,64}$/.test(commit)) {
+        throw new UsageError('publish-after-push requires --remote, --branch, --expected <sha> and --commit <sha>.');
     }
     const root = await findRepoRoot(io.cwd);
     for (let attempt = 0; attempt < 60; attempt++) {
-        const remoteSha = (await tryGit(root, ['ls-remote', remote, `refs/heads/${branch}`]))?.trim().split(/\s+/)[0];
-        if (remoteSha && (await tryGit(root, ['merge-base', '--is-ancestor', expected, remoteSha])) !== null) {
-            const result = await runProcess('git', ['push', remote, `HEAD:refs/heads/${branch}`], {
+        const observation = await runProcess('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: root, timeoutMs: 5000, env: { ...io.env, GIT_TERMINAL_PROMPT: '0' } });
+        const remoteSha = observation.exitCode === 0 ? observation.stdout.trim().split(/\s+/)[0] : null;
+        if (remoteSha === expected) {
+            const result = await runProcess('git', ['push', remote, `${commit}:refs/heads/${branch}`], {
                 cwd: root,
-                env: { ...io.env, AI_E2E_SKIP: '1' },
+                env: { ...io.env, GIT_TERMINAL_PROMPT: '0' },
                 timeoutMs: 10 * 60 * 1000,
                 maxOutputBytes: 64 * 1024 * 1024,
             });
             if (result.exitCode === 0) {
-                const head = (await tryGit(root, ['rev-parse', '--short', 'HEAD']))?.trim() ?? 'HEAD';
-                io.out(`\nai-e2e: ✅ Done. Generated E2E tests passed locally and were pushed to ${remote}/${branch} (${head}).\n`);
+                io.out(`\nPushPilot: Done. Verified E2E tests were pushed to ${remote}/${branch} (${commit.slice(0, 12)}).\n`);
                 return 0;
             }
-            io.err(`\nai-e2e: follow-up push of the generated tests failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\nRun \`AI_E2E_SKIP=1 git push\` to publish them.\n`);
+            io.err(`\nPushPilot: follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\nReview the local test commit and run normal \`git push\` to publish it.\n`);
             return 1;
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    io.err('\nai-e2e: original push was not observed on the remote; generated tests were left committed locally. Run `AI_E2E_SKIP=1 git push` to publish them.\n');
+    io.err('\nPushPilot: original push was not observed on the remote; tests remain committed locally. Inspect the remote and run normal `git push` to publish them.\n');
     return 1;
 }
 async function cmdStatus(args, io) {
@@ -372,12 +386,12 @@ async function cmdConfig(args, io) {
             return 0;
         case 'get':
             if (!key)
-                throw new UsageError('Usage: ai-e2e config get <key>');
+                throw new UsageError('Usage: pushpilot config get <key>');
             io.out(`${JSON.stringify(getConfigValue(loaded.config, key), null, 2)}\n`);
             return 0;
         case 'set': {
             if (!key || value === undefined)
-                throw new UsageError('Usage: ai-e2e config set <key> <json-or-string-value>');
+                throw new UsageError('Usage: pushpilot config set <key> <json-or-string-value>');
             const next = setConfigValue(loaded.raw, key, parseConfigValue(value));
             writeConfig(loaded.path, next);
             io.out(`Set ${key} in ${CONFIG_FILE}.\n`);
@@ -411,7 +425,7 @@ async function cmdProviders(args, io) {
         const state = row.available ? `available — ${row.version ?? 'unknown version'}` : `unavailable — ${row.reason}`;
         io.out(`${row.selected ? '*' : ' '} ${row.id.padEnd(9)} ${row.name}: ${state}\n    ${row.verification}\n`);
     }
-    io.out(`\nSelected provider: ${config.provider}. Change with: ai-e2e config set provider <id>\n`);
+    io.out(`\nSelected provider: ${config.provider}. Change with: pushpilot config set provider <id>\n`);
     return 0;
 }
 async function cmdPlaywrightInit(args, io) {
@@ -429,7 +443,7 @@ async function cmdPlaywrightInit(args, io) {
     }
     else {
         if (!values.yes) {
-            io.out('No Playwright setup found. Re-run `ai-e2e playwright-init --yes` and the selected coding CLI will inspect the repository, install the appropriate package, and create the config.\n');
+            io.out('No Playwright setup found. Run `pushpilot playwright-init --yes` to inspect the language, configure Playwright, and verify actual tests.\n');
             return 0;
         }
     }
@@ -438,7 +452,7 @@ async function cmdPlaywrightInit(args, io) {
     const provider = getProvider(config.provider);
     const settings = {
         ...(config.providers[provider.id] ?? config.providers.copilot),
-        allowedShellCommands: ['copilot', 'git', 'node', 'npm', 'npx', 'pnpm', 'yarn'],
+        allowedShellCommands: ['git', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'python', 'python3', 'pytest', 'uv'],
     };
     const availability = await detectProvider(provider, settings, root);
     if (!availability.available)
@@ -455,13 +469,20 @@ async function cmdPlaywrightInit(args, io) {
     const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
         cwd: root,
         interactive: true,
+        timeoutMs: config.generation.timeoutSeconds * 1000,
         onOutput: (chunk) => io.out(chunk),
     });
     if (result.exitCode !== 0)
         return 1;
-    const after = await detectPlaywright(root, config);
+    const afterConfig = loadConfig(root).config;
+    const after = await detectPlaywright(root, afterConfig);
     if (!after.found)
         throw new AiE2eError('The coding CLI completed without creating a detectable Playwright setup.');
+    if (!after.testFiles.length)
+        throw new AiE2eError('No runnable tests were found after setup.');
+    const verified = await runGeneratedTests(root, afterConfig, after, after.testFiles, (line) => io.out(`${line}\n`));
+    if (!verified?.passed)
+        throw new AiE2eError('Setup verification failed: actual browser tests must pass; inspect the runner output.');
     io.out(`Playwright setup verified (${after.configPath ?? after.dependency}).\n`);
     return 0;
 }
@@ -471,9 +492,9 @@ async function cmdUninstall(args, io) {
     const result = await uninstallHook(root);
     const rel = path.relative(root, result.file);
     io.out({
-        'removed-block': `Removed the ai-e2e block from ${rel}; the rest of the hook is unchanged.\n`,
-        'deleted-file': `Deleted ${rel} (it only contained the ai-e2e block).\n`,
-        'not-installed': `No ai-e2e block found in ${rel}.\n`,
+        'removed-block': `Removed the PushPilot block from ${rel}; the rest of the hook is unchanged.\n`,
+        'deleted-file': `Deleted ${rel} (it only contained the PushPilot block).\n`,
+        'not-installed': `No PushPilot block found in ${rel}.\n`,
     }[result.action]);
     io.out(`${CONFIG_FILE} and the state directory were left in place; delete them manually if no longer needed.\n`);
     return 0;
@@ -481,7 +502,7 @@ async function cmdUninstall(args, io) {
 async function cmdHook(args, io) {
     const [name, remote] = args;
     if (name !== 'pre-push') {
-        io.err(`ai-e2e: unsupported hook "${name ?? ''}"; ignoring.\n`);
+        io.err(`PushPilot: unsupported hook "${name ?? ''}"; ignoring.\n`);
         return 0;
     }
     let stdin = '';
@@ -529,6 +550,15 @@ const COMMANDS = {
 };
 export async function run(argv, io) {
     const [command, ...rest] = argv;
+    if (command === 'help' && rest[0]) {
+        const text = COMMAND_HELP[rest[0]];
+        if (!text) {
+            io.err(`Unknown command "${rest[0]}".\n`);
+            return 2;
+        }
+        io.out(`${text}\n\n--help, -h: show this help.\n`);
+        return 0;
+    }
     if (!command || command === 'help' || command === '--help' || command === '-h') {
         io.out(HELP);
         return 0;
@@ -543,7 +573,7 @@ export async function run(argv, io) {
         return 2;
     }
     if (rest.includes('--help') || rest.includes('-h')) {
-        io.out(HELP);
+        io.out(`${COMMAND_HELP[command] ?? HELP}\n\n--help, -h: show this help.\n`);
         return 0;
     }
     try {
@@ -551,10 +581,10 @@ export async function run(argv, io) {
     }
     catch (error) {
         if (command === 'hook') {
-            io.err(`ai-e2e: failed (${errorMessage(error)}). Push is blocked.\n`);
+            io.err(`PushPilot: failed (${errorMessage(error)}). Push is blocked.\n`);
             return 1;
         }
-        io.err(`ai-e2e: ${errorMessage(error)}\n`);
+        io.err(`PushPilot: ${errorMessage(error)}\n`);
         return error instanceof UsageError ? 2 : 1;
     }
 }

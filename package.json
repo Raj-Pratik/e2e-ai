@@ -1,6 +1,6 @@
 {
-  "name": "ai-e2e",
-  "version": "0.1.0",
+  "name": "pushpilot",
+  "version": "1.0.0",
   "description": "AI-assisted Playwright E2E test generation for outgoing Git changes.",
   "type": "module",
   "license": "MIT",
@@ -13,6 +13,7 @@
   },
   "homepage": "https://github.com/Raj-Pratik/e2e-ai",
   "bin": {
+    "pushpilot": "dist/src/cli.js",
     "ai-e2e": "dist/src/cli.js"
   },
   "files": [
@@ -27,7 +28,9 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js"
+    "test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js",
+    "release:check": "node scripts/release.mjs check",
+    "release:bundle": "node scripts/release.mjs bundle"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
