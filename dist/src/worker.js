@@ -9,6 +9,7 @@ import { JobStore } from './jobs.js';
 import { createLogger } from './log.js';
 import { detectPlaywright, isWithin, isTestFile, testCommand } from './playwright.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
+import { resolveHookTarget } from './hookInstall.js';
 import { askYesNo, openTerminal } from './prompt.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, secretEnvNames } from './providers/index.js';
 import { redact } from './redact.js';
@@ -34,6 +35,30 @@ function snapshotFiles(root, files) {
         }
     }
     return { files: map };
+}
+// Files PushPilot's own setup writes (config, ignore rule, hook, Playwright config). They may be uncommitted without blocking generation.
+async function setupOwnedFiles(root, setup) {
+    const owned = ['.ai-e2e.json', '.gitignore'];
+    if (setup.configPath)
+        owned.push(path.relative(root, path.resolve(root, setup.configPath)));
+    const hook = await resolveHookTarget(root).catch(() => null);
+    if (hook)
+        owned.push(path.relative(root, hook.file));
+    return new Set(owned.map((file) => file.split(path.sep).join('/')));
+}
+function restoreSetupFiles(root, before) {
+    const warnings = [];
+    for (const [file, original] of before.files) {
+        if (original === null)
+            continue;
+        const abs = path.join(root, file);
+        const current = fs.existsSync(abs) ? fs.readFileSync(abs) : null;
+        if (current && current.equals(original))
+            continue;
+        fs.writeFileSync(abs, original);
+        warnings.push(`The coding CLI changed PushPilot setup file ${file}; original restored.`);
+    }
+    return warnings;
 }
 function lineWriter(log, prefix) {
     let pending = '';
@@ -237,9 +262,12 @@ export async function runJob(options) {
         const before = snapshotFiles(root, listedBefore);
         const statusBefore = await statusSnapshot(root);
         const stateRelative = path.relative(root, store.stateDir).split(path.sep).join('/');
-        const relevantDirty = [...statusBefore.keys()].filter((file) => !file.startsWith(`${stateRelative}/`));
+        const owned = await setupOwnedFiles(root, setup);
+        const isIgnoredDirty = (file) => file.startsWith(`${stateRelative}/`) || owned.has(file);
+        const relevantDirty = [...statusBefore.keys()].filter((file) => !isIgnoredDirty(file));
         if (relevantDirty.length)
             throw new AiE2eError(`Working tree must be clean before generation; preserve and review these changes first: ${relevantDirty.join(', ')}`);
+        const setupBefore = snapshotFiles(root, [...owned]);
         const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
         const providerOut = lineWriter(log, `[${provider.id}] `);
         const doneFile = path.join(jobDir, DONE_FILE);
@@ -288,7 +316,7 @@ export async function runJob(options) {
                 log('Agent reported completion; the coding CLI session was closed automatically.');
             const done = readDone();
             if (done?.status === 'not-needed') {
-                const dirty = [...(await statusSnapshot(root)).keys()].filter((file) => !file.startsWith(`${stateRelative}/`));
+                const dirty = [...(await statusSnapshot(root)).keys()].filter((file) => !isIgnoredDirty(file));
                 if (dirty.length || (await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore) {
                     throw new AiE2eError('Agent reported not-needed but changed the repository. Review changes; push blocked.');
                 }
@@ -421,10 +449,12 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
             generatedFiles = changedTests(afterHealing);
         }
         const finalStatus = await statusSnapshot(root);
+        for (const warning of restoreSetupFiles(root, setupBefore))
+            log(warning);
         const allowed = new Set(generatedFiles.filter((file) => scanDirs.some((dir) => isWithin(dir, file)) && /\.(?:[cm]?[jt]sx?|py)$/.test(file) &&
             fs.lstatSync(path.join(root, file)).isFile() &&
             fs.realpathSync(path.join(root, file)).startsWith(`${fs.realpathSync(root)}${path.sep}`)));
-        const unsafe = [...finalStatus.keys()].filter((file) => !file.startsWith(`${stateRelative}/`) && !allowed.has(file));
+        const unsafe = [...finalStatus.keys()].filter((file) => !isIgnoredDirty(file) && !allowed.has(file));
         if (unsafe.length || generatedFiles.some((file) => !allowed.has(file))) {
             throw new AiE2eError(`Changes outside allowed test source files detected; nothing committed. Review: ${unsafe.join(', ') || generatedFiles.join(', ')}`);
         }
@@ -442,7 +472,7 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
             }
             if (signal.aborted || (await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore ||
                 (await git(root, ['diff', '--cached', '--name-only'])).trim() ||
-                [...(await statusSnapshot(root)).keys()].some((file) => !file.startsWith(`${stateRelative}/`) && !allowed.has(file))) {
+                [...(await statusSnapshot(root)).keys()].some((file) => !isIgnoredDirty(file) && !allowed.has(file))) {
                 throw new AiE2eError('Repository changed or generation was cancelled after verification. Nothing committed; review and retry.');
             }
         };
