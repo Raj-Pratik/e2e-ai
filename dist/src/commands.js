@@ -15,7 +15,7 @@ import { detectPlaywright } from './playwright.js';
 import { askChoice, openTerminal } from './prompt.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
-import { runGeneratedTests, runJob } from './worker.js';
+import { runJob } from './worker.js';
 export class UsageError extends AiE2eError {
 }
 export const HELP = `PushPilot — approved, independently verified Playwright coverage for outgoing Git changes
@@ -148,14 +148,12 @@ async function cmdInit(args, io) {
     const setup = await detectPlaywright(root, config);
     io.out(setup.found
         ? `Playwright: config ${setup.configPath ?? '(none)'}, tests in ${setup.testDir}, new tests go to ${setup.outputDir}.\n`
-        : 'Playwright: not detected. Interactive init will set it up; otherwise run `pushpilot playwright-init --yes` before generation.\n');
+        : 'Playwright: not detected. Run `pushpilot playwright-init --yes` to set it up with your coding CLI.\n');
     const provider = getProvider(config.provider);
     const availability = await detectProvider(provider, config.providers[provider.id] ?? config.providers.copilot, root);
     io.out(`Provider: ${provider.displayName} — ${availability.available ? `available (${availability.version ?? 'unknown version'})` : availability.reason}\n`);
     io.out('Privacy: when you accept the prompt, outgoing diffs and related test files are sent to the selected AI provider.\n');
-    if (hasInteractiveTerminal())
-        return cmdPlaywrightInit(['--yes'], io);
-    io.out('Setup not verified: no interactive terminal. Run `pushpilot playwright-init --yes` in a terminal before accepting generation.\n');
+    io.out('Init complete. Next: run `pushpilot playwright-init --yes` to set up Playwright (optional, separate step).\n');
     return 0;
 }
 async function resolveCommit(root, rev) {
@@ -478,12 +476,7 @@ async function cmdPlaywrightInit(args, io) {
     const after = await detectPlaywright(root, afterConfig);
     if (!after.found)
         throw new AiE2eError('The coding CLI completed without creating a detectable Playwright setup.');
-    if (!after.testFiles.length)
-        throw new AiE2eError('No runnable tests were found after setup.');
-    const verified = await runGeneratedTests(root, afterConfig, after, after.testFiles, (line) => io.out(`${line}\n`));
-    if (!verified?.passed)
-        throw new AiE2eError('Setup verification failed: actual browser tests must pass; inspect the runner output.');
-    io.out(`Playwright setup verified (${after.configPath ?? after.dependency}).\n`);
+    io.out(`Playwright setup detected (${after.configPath ?? after.dependency}). No tests were run by PushPilot; the coding CLI reported its own verification.\n`);
     return 0;
 }
 async function cmdUninstall(args, io) {

@@ -79,8 +79,8 @@ Review and commit setup changes yourself before generating outgoing coverage.
 JavaScript/TypeScript uses Playwright Test. Python uses `pytest-playwright` and your
 virtual environment, configured by the setup session. Mixed or unusual layouts need an
 explicit test directory and command. Other language runners are not supported.
-If init is run without a terminal it installs configuration/hook only and reports that
-setup is unverified; complete it with `pushpilot playwright-init --yes`.
+`init` installs configuration and the pre-push hook only. It never starts a coding CLI or
+runs tests. Run `pushpilot playwright-init --yes` separately to set up Playwright.
 
 ## The push experience
 
@@ -108,8 +108,8 @@ with skipped tests or requires production access.
 
 | Command | Purpose / options |
 | --- | --- |
-| `init` | Configure provider, hook, and verified Playwright setup. `--no-hook` skips hook installation; `--force` allows insertion into a managed hook after backup (does not overwrite config). |
-| `playwright-init` | Show setup guidance. `--yes` opens the main coding CLI and then runs independent verification. |
+| `init` | Configure provider and the pre-push hook only. Never starts a coding CLI or runs tests. `--no-hook` skips hook installation; `--force` allows insertion into a managed hook after backup (does not overwrite config). |
+| `playwright-init` | Show setup guidance. `--yes` opens the main coding CLI to set up Playwright; PushPilot does not run tests afterwards. |
 | `generate` | Generate coverage without initiating a push. `--base REV`, `--head REV` (default HEAD), `--provider copilot\|claude`, `--force` retry duplicate changes. `--foreground` is retained for compatibility; all generation is foreground. |
 | `push` | Alias for normal `git push`; all arguments pass to Git and the installed hook handles coverage. |
 | `status [JOB]` | Recent jobs or one job; `--json`, `--limit N` (default 10). |
