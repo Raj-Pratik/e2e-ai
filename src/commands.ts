@@ -22,7 +22,7 @@ import { isValidJobId, JobStore, type JobRecord } from './jobs.js';
 import { CLI_PATH, startJob } from './launcher.js';
 import { createLogger } from './log.js';
 import { detectPlaywright } from './playwright.js';
-import { askChoice, openTerminal } from './prompt.js';
+import { openTerminal, selectOption, type SelectOption } from './prompt.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
 import type { PushRef } from './refs.js';
@@ -57,6 +57,7 @@ Commands:
   logs [<job-id>] [--tail <n>]        Print a job log (default: latest job)
   config [show|get <key>|set <key> <value>|validate|path]
                                       Display or update configuration
+  provider [<id>]                     Pick the AI provider from a list (or set it directly)
   providers [--json]                  List AI providers and whether they are available
   playwright-init [--yes]             Explain (or, with --yes, let the coding CLI set up Playwright)
   uninstall                           Remove the PushPilot block from the pre-push hook
@@ -75,7 +76,8 @@ const COMMAND_HELP: Record<string, string> = {
   push: 'pushpilot push [git push arguments]\nRuns normal git push. Install the hook with pushpilot init first.\nAll remaining arguments (remote, refs, --force-with-lease, etc.) go to Git.',
   status: 'pushpilot status [JOB] [--json] [--limit N]\nShow one job or recent jobs. --limit defaults to 10; --json emits machine-readable results.',
   logs: 'pushpilot logs [JOB] [--tail N]\nPrint the latest or selected job log. --tail defaults to 200 lines.',
-  config: 'pushpilot config [show|get KEY|set KEY VALUE|validate|path]\nDotted keys address settings; VALUE is JSON or a string. Existing .ai-e2e.json is preserved.\nExample: pushpilot config set provider claude',
+  config: 'pushpilot config [show|get KEY|set KEY VALUE|validate|path]\nDotted keys address settings; VALUE is JSON or a string. Existing .ai-e2e.json is preserved.\nExample: pushpilot config set generation.timeoutSeconds 7200',
+  provider: 'pushpilot provider [copilot|claude]\nWithout an argument, pick the provider from a list with the arrow keys and Enter.\nWith an argument, only a listed provider id is accepted.',
   providers: 'pushpilot providers [--json]\nCheck installed Copilot and Claude CLIs, versions, and selected provider.',
   'playwright-init': 'pushpilot playwright-init [--yes]\nWithout --yes, show guidance. --yes launches the main coding CLI to inspect JS/Python,\nconfigure Playwright, and run smoke tests; PushPilot independently reruns actual tests.',
   uninstall: 'pushpilot uninstall\nRemove only the legacy-compatible hook block. Keep configuration, tests, state and unrelated hooks.',
@@ -129,13 +131,13 @@ async function cmdInit(args: string[], io: CliIO): Promise<number> {
     const tty = openTerminal();
     if (tty) {
       try {
-        const selected = await askChoice('Which AI provider should PushPilot use by default? (Enter: Copilot)', ['GitHub Copilot CLI', 'Claude Code CLI'], tty, 60_000);
-        if (selected === 'Claude Code CLI') initial.provider = 'claude';
+        const selected = await selectOption('Which AI provider should PushPilot use by default?', await providerOptions(root), tty);
+        if (selected) initial.provider = selected;
       } finally {
         tty.close();
       }
     } else {
-      io.out('No interactive terminal; defaulting to GitHub Copilot CLI. Use `pushpilot config set provider claude` to switch.\n');
+      io.out('No interactive terminal; defaulting to GitHub Copilot CLI. Run `pushpilot provider` to pick another.\n');
     }
     writeConfig(configFile, initial);
     io.out(`Config: created ${CONFIG_FILE} (commit it to share settings).\n`);
@@ -308,6 +310,7 @@ async function cmdPublishAfterPush(args: string[], io: CliIO): Promise<number> {
     branch: { type: 'string' },
     expected: { type: 'string' },
     commit: { type: 'string' },
+    log: { type: 'string' },
   });
   const remote = values.remote;
   const branch = values.branch;
@@ -317,34 +320,71 @@ async function cmdPublishAfterPush(args: string[], io: CliIO): Promise<number> {
       remote.startsWith('-') || branch.startsWith('-') || !/^[a-f0-9]{40,64}$/.test(expected) || !/^[a-f0-9]{40,64}$/.test(commit)) {
     throw new UsageError('publish-after-push requires --remote, --branch, --expected <sha> and --commit <sha>.');
   }
+  const logFile = typeof values.log === 'string' ? values.log : null;
   const root = await findRepoRoot(io.cwd);
+  const say = (text: string): void => {
+    io.out(text);
+    if (logFile) {
+      try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${text.trim()}\n`); } catch { /* log is best effort */ }
+    }
+  };
   const done = (ok: boolean, message: string): number => {
-    (ok ? io.out : io.err)(`\nPushPilot: ${message}\n`);
-    notifyUser(ok ? 'PushPilot: done' : 'PushPilot: push needs attention', message, io.env);
+    say(`\nPushPilot: ${message}\n`);
+    notifyUser(ok ? 'PushPilot: all done' : 'PushPilot: push needs attention', message, io.env);
     return ok ? 0 : 1;
   };
-  // Waits for the original push for as long as its git process is alive (large pushes and slow hooks take time).
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  // AI_E2E_SKIP keeps PushPilot's own hook block from prompting again; other pre-push policies still run.
+  const env = { ...io.env, GIT_TERMINAL_PROMPT: '0', AI_E2E_SKIP: '1' };
+  /** Remote branch SHA, '' when the branch does not exist, null when the remote is unreachable. */
+  const remoteHead = async (): Promise<string | null> => {
+    const r = await runProcess('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: root, timeoutMs: 30_000, env });
+    return r.exitCode === 0 ? (r.stdout.trim().split(/\s+/)[0] ?? '') : null;
+  };
+
+  // 1. Let the original `git push` finish first. It may succeed, fail (e.g. its connection idled out
+  //    during generation) or be cancelled; the pinned commit contains its commits either way.
   const parent = Number(io.env.AI_E2E_PUSH_PID);
   const pushAlive = (): boolean => {
     if (!Number.isInteger(parent) || parent <= 1) return false;
     try { process.kill(parent, 0); return true; } catch { return false; }
   };
-  for (let attempt = 0; attempt < 120 || pushAlive(); attempt++) {
-    const observation = await runProcess('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: root, timeoutMs: 5000, env: { ...io.env, GIT_TERMINAL_PROMPT: '0' } });
-    const remoteSha = observation.exitCode === 0 ? observation.stdout.trim().split(/\s+/)[0] : null;
-    if (remoteSha === expected) {
-      const result = await runProcess('git', ['push', remote, `${commit}:refs/heads/${branch}`], {
-        cwd: root,
-        env: { ...io.env, GIT_TERMINAL_PROMPT: '0' },
-        timeoutMs: 10 * 60 * 1000,
-        maxOutputBytes: 64 * 1024 * 1024,
-      });
-      if (result.exitCode === 0) return done(true, `Done. Verified E2E tests were committed and pushed to ${remote}/${branch} (${commit.slice(0, 12)}).`);
-      return done(false, `follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}. Review the local test commit and run normal \`git push\` to publish it.`);
+  if (Number.isInteger(parent) && parent > 1) {
+    while (pushAlive()) await sleep(500);
+  } else {
+    for (let i = 0; i < 60; i++) {
+      const head = await remoteHead();
+      if (head === expected || head === commit) break;
+      await sleep(2000);
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  return done(false, 'original push was not observed on the remote; tests remain committed locally. Inspect the remote and run normal `git push` to publish them.');
+
+  // 2. Push the pinned commit as a fast-forward from whatever the remote now holds.
+  let lastError = '';
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const current = await remoteHead();
+    if (current === commit) return done(true, `All done. Verified E2E tests are committed and pushed to ${remote}/${branch} (${commit.slice(0, 12)}).`);
+    if (current === null) {
+      lastError = `could not reach ${remote}`;
+      await sleep(5000);
+      continue;
+    }
+    if (current && !(await tryGit(root, ['merge-base', '--is-ancestor', current, commit]) !== null)) {
+      return done(false, `${remote}/${branch} moved to ${current.slice(0, 12)}, which is not part of the test commit ${commit.slice(0, 12)}. ` +
+        'Run `git pull --rebase` and `git push` to publish the tests.');
+    }
+    say(`\nPushPilot: pushing the verified E2E test commit ${commit.slice(0, 12)} to ${remote}/${branch}...\n`);
+    const result = await runProcess('git', ['push', `--force-with-lease=refs/heads/${branch}:${current}`, remote, `${commit}:refs/heads/${branch}`], {
+      cwd: root,
+      env,
+      timeoutMs: 10 * 60 * 1000,
+      maxOutputBytes: 64 * 1024 * 1024,
+    });
+    if (result.exitCode === 0) return done(true, `All done. Verified E2E tests are committed and pushed to ${remote}/${branch} (${commit.slice(0, 12)}).`);
+    lastError = result.stderr.trim() || `exit code ${result.exitCode}`;
+    await sleep(5000);
+  }
+  return done(false, `could not push the verified test commit ${commit.slice(0, 12)} (${lastError}). It is committed locally; run \`git push\` to publish it.`);
 }
 
 async function cmdVerify(args: string[], io: CliIO): Promise<number> {
@@ -429,6 +469,9 @@ async function cmdConfig(args: string[], io: CliIO): Promise<number> {
       return 0;
     case 'set': {
       if (!key || value === undefined) throw new UsageError('Usage: pushpilot config set <key> <json-or-string-value>');
+      if (key === 'provider' && !listProviders().some((p) => p.id === value)) {
+        throw new UsageError(`Unknown provider "${value}". Choose one of: ${listProviders().map((p) => p.id).join(', ')} (or run \`pushpilot provider\` to pick from a list).`);
+      }
       const next = setConfigValue(loaded.raw, key, parseConfigValue(value));
       writeConfig(loaded.path, next);
       io.out(`Set ${key} in ${CONFIG_FILE}.\n`);
@@ -437,6 +480,44 @@ async function cmdConfig(args: string[], io: CliIO): Promise<number> {
     default:
       throw new UsageError(`Unknown config action "${action}". Use show, get, set, validate or path.`);
   }
+}
+
+async function providerOptions(root: string, config = defaultConfig()): Promise<SelectOption[]> {
+  return Promise.all(listProviders().map(async (p) => {
+    const availability = await detectProvider(p, config.providers[p.id] ?? config.providers.copilot!, root);
+    return {
+      value: p.id,
+      label: `${p.id.padEnd(8)} ${p.displayName}`,
+      hint: availability.available ? (availability.version ?? 'installed') : 'not installed',
+    };
+  }));
+}
+
+async function cmdProvider(args: string[], io: CliIO): Promise<number> {
+  const { positionals } = parse(args, {});
+  const root = await findRepoRoot(io.cwd);
+  const loaded = loadConfig(root);
+  const ids = listProviders().map((p) => p.id);
+  let chosen = positionals[0];
+  if (chosen === undefined) {
+    const tty = openTerminal();
+    if (!tty) throw new UsageError(`No interactive terminal. Run: pushpilot provider <${ids.join('|')}>`);
+    try {
+      const options = await providerOptions(root, loaded.config);
+      const current = Math.max(0, ids.indexOf(loaded.config.provider));
+      chosen = (await selectOption('Select the AI provider PushPilot should use', options, tty, current)) ?? undefined;
+    } finally {
+      tty.close();
+    }
+    if (!chosen) {
+      io.out(`Cancelled; provider stays ${loaded.config.provider}.\n`);
+      return 0;
+    }
+  }
+  if (!ids.includes(chosen)) throw new UsageError(`Unknown provider "${chosen}". Choose one of: ${ids.join(', ')}.`);
+  writeConfig(loaded.path, setConfigValue(loaded.raw, 'provider', chosen));
+  io.out(`Provider set to ${chosen} (${getProvider(chosen).displayName}).\n`);
+  return 0;
 }
 
 async function cmdProviders(args: string[], io: CliIO): Promise<number> {
@@ -464,7 +545,7 @@ async function cmdProviders(args: string[], io: CliIO): Promise<number> {
     const state = row.available ? `available — ${row.version ?? 'unknown version'}` : `unavailable — ${row.reason}`;
     io.out(`${row.selected ? '*' : ' '} ${row.id.padEnd(9)} ${row.name}: ${state}\n    ${row.verification}\n`);
   }
-  io.out(`\nSelected provider: ${config.provider}. Change with: pushpilot config set provider <id>\n`);
+  io.out(`\nSelected provider: ${config.provider}. Change it with: pushpilot provider\n`);
   return 0;
 }
 
@@ -579,6 +660,7 @@ const COMMANDS: Record<string, (args: string[], io: CliIO) => Promise<number>> =
   status: cmdStatus,
   logs: cmdLogs,
   config: cmdConfig,
+  provider: cmdProvider,
   providers: cmdProviders,
   'playwright-init': cmdPlaywrightInit,
   uninstall: cmdUninstall,

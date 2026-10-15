@@ -146,20 +146,29 @@ function openUserTerminal() {
             fs.closeSync(ttyFd);
     }
 }
-/** PID of the `git push` that ran the hook: the hook shell is our parent, git is its parent. */
+/** PID of the `git push` that ran the hook, found by walking up the process tree (shims and shells sit in between). */
 function gitPushPid() {
     if (process.platform === 'win32')
         return null;
-    const out = spawnSync('ps', ['-o', 'ppid=', '-p', String(process.ppid)], { encoding: 'utf8' }).stdout?.trim();
-    const pid = Number(out);
-    return Number.isInteger(pid) && pid > 1 ? pid : null;
+    let pid = process.ppid;
+    for (let depth = 0; depth < 8 && pid > 1; depth++) {
+        const out = spawnSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8' }).stdout?.trim() ?? '';
+        const match = /^(\d+)\s+(.+)$/.exec(out);
+        if (!match)
+            return null;
+        if (path.basename(match[2]) === 'git')
+            return pid;
+        pid = Number(match[1]);
+    }
+    return null;
 }
 function scheduleFollowUpPush(root, remote, refs, logFile, commit) {
     const ref = refs.find((candidate) => candidate.localRef.startsWith('refs/heads/') && candidate.remoteRef.startsWith('refs/heads/'));
     const cli = CLI_FILE;
     if (!ref)
         throw new AiE2eError('Could not schedule the follow-up push: branch ref or CLI path is unavailable.');
-    const output = openUserTerminal() ?? fs.openSync(logFile, 'a');
+    // The publisher appends to the job log itself; the terminal (when there is one) shows the final message live.
+    const terminal = openUserTerminal();
     const child = spawn(process.execPath, [
         cli,
         'publish-after-push',
@@ -171,17 +180,20 @@ function scheduleFollowUpPush(root, remote, refs, logFile, commit) {
         ref.localSha,
         '--commit',
         commit,
+        '--log',
+        logFile,
     ], {
         cwd: root,
         detached: true,
-        stdio: ['ignore', output, output],
+        stdio: ['ignore', terminal ?? 'ignore', terminal ?? 'ignore'],
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', AI_E2E_PUSH_PID: String(gitPushPid() ?? '') },
     });
     child.once('error', (error) => {
         fs.appendFileSync(logFile, `PushPilot: follow-up publisher could not start: ${error.message}. Review the local commit and run git push.\n`);
     });
     child.unref();
-    fs.closeSync(output);
+    if (terminal !== null)
+        fs.closeSync(terminal);
 }
 export async function runJob(options) {
     const { repoRoot: root, jobId } = options;
@@ -404,7 +416,7 @@ export async function runJob(options) {
                 if (!job.remote)
                     throw new AiE2eError('Generated tests were committed, but the pre-push remote is unavailable for publishing.');
                 scheduleFollowUpPush(root, job.remote, refs, store.logFile(jobId), generatedCommit);
-                log('Your push continues now; the generated-test commit is pushed automatically right after it, and you will be notified when it is done.');
+                log('Your push continues now. PushPilot pushes the test commit right after it (even if that push fails) and notifies you when everything is pushed.');
             }
             else {
                 notifyUser('PushPilot', `Verified E2E tests committed locally (${generatedCommit.slice(0, 12)}).`);

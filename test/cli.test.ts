@@ -60,6 +60,16 @@ describe('CLI parsing', () => {
     const get = captureIO(root);
     await run(['config', 'get', 'provider'], get);
     assert.equal(get.stdout().trim(), '"claude"');
+    const typo = captureIO(root);
+    assert.equal(await run(['config', 'set', 'provider', 'gpt'], typo), 2);
+    assert.match(typo.stderr(), /Choose one of: copilot, claude/);
+    assert.equal(await run(['provider', 'copilot'], captureIO(root)), 0);
+    const nope = captureIO(root);
+    assert.equal(await run(['provider', 'anything'], nope), 2);
+    assert.match(nope.stderr(), /Unknown provider "anything"/);
+    const after = captureIO(root);
+    await run(['config', 'get', 'provider'], after);
+    assert.equal(after.stdout().trim(), '"copilot"');
     const bad = captureIO(root);
     assert.equal(await run(['config', 'set', 'context.maxFiles', '"lots"'], bad), 1);
     assert.match(bad.stderr(), /integer/);

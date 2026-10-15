@@ -97,8 +97,8 @@ runs tests. Run `pushpilot playwright-init --yes` separately to set up Playwrigh
    a positive passed-test count, or any skipped/failed/flaky test, never counts as passing.
 6. PushPilot commits exactly the verified test files (refusing dirty starting trees, unrelated
    edits, deleted files, or changes to HEAD/index).
-7. The original push completes; a follow-up normal push publishes the exact generated commit
-   once the original push lands, then sends a desktop notification. Other pre-push policies
+7. After the original `git push` exits (whether it succeeded or not), PushPilot pushes the
+   exact generated commit as a fast-forward and sends a desktop notification saying all is done. Other pre-push policies
    still run. Publishing failures leave tests committed locally and report recovery instructions.
 
 A coverage-not-needed decision includes a reason and must leave the repository unchanged.
@@ -118,6 +118,7 @@ accept a plan that hides failures with skipped tests or requires production acce
 | `push` | Alias for normal `git push`; all arguments pass to Git and the installed hook handles coverage. |
 | `status [JOB]` | Recent jobs or one job; `--json`, `--limit N` (default 10). |
 | `logs [JOB]` | Latest or selected job log; `--tail N` (default 200). |
+| `provider [ID]` | Pick the AI provider from a list (arrow keys + Enter). With `ID`, only a listed provider is accepted. |
 | `providers` | Provider availability; `--json`. |
 | `config show` | Effective settings. |
 | `config get KEY` | Read a dotted setting. |
@@ -130,7 +131,7 @@ accept a plan that hides failures with skipped tests or requires production acce
 Switch providers or configure Python:
 
 ```sh
-pushpilot config set provider claude
+pushpilot provider            # pick copilot or claude from a list (↑/↓, Enter)
 pushpilot config set playwright.testDir tests/e2e
 pushpilot config set playwright.testCommand '[".venv/bin/python","-m","pytest"]'
 pushpilot config set generation.commitGeneratedTests false

@@ -294,4 +294,20 @@ describe('background worker job execution', () => {
     assert.equal(git(remote, 'rev-parse', 'main').trim(), job.generatedCommit);
     assert.notEqual(git(root, 'rev-parse', 'HEAD').trim(), job.generatedCommit);
   });
+
+  it('publishes the test commit even when the original push never reached the remote', async () => {
+    const { root, store, jobId } = await prepare({ config: fakeProviderConfig({ generation: { commitGeneratedTests: true } }) });
+    store.update(jobId, { source: 'manual' });
+    const expected = git(root, 'rev-parse', 'HEAD').trim();
+    const job = await runJob({ repoRoot: root, jobId, log });
+    assert.equal(job.status, 'succeeded', job.error);
+    const io = captureIO(root);
+    io.env.AI_E2E_PUSH_PID = '999999';
+    const logFile = path.join(tmpDir(), 'publish.log');
+    assert.equal(await run(['publish-after-push', '--remote', 'origin', '--branch', 'main', '--expected', expected, '--commit', job.generatedCommit!, '--log', logFile], io), 0, io.stderr());
+    const remote = git(root, 'remote', 'get-url', 'origin').trim();
+    assert.equal(git(remote, 'rev-parse', 'main').trim(), job.generatedCommit);
+    assert.match(io.stdout(), /All done/);
+    assert.match(fs.readFileSync(logFile, 'utf8'), /All done/);
+  });
 });

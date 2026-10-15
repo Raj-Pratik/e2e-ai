@@ -99,7 +99,7 @@ describe('git push integration', () => {
   it('a missing CLI build does not reject the push', async () => {
     const repo = await setup();
     const hook = path.join(repo.root, '.git', 'hooks', 'pre-push');
-    fs.writeFileSync(hook, fs.readFileSync(hook, 'utf8').replace('command -v ai-e2e 2>/dev/null || true', 'true').replace(/else ai_e2e_cli=.*?; fi/, "else ai_e2e_cli='/nonexistent/cli.js'; fi"));
+    fs.writeFileSync(hook, fs.readFileSync(hook, 'utf8').replace(/command -v pushpilot 2>\/dev\/null \|\| command -v ai-e2e 2>\/dev\/null \|\| true/, 'true').replace(/else ai_e2e_cli=.*?; fi/, "else ai_e2e_cli='/nonexistent/cli.js'; fi"));
     const result = await runDetached('git', ['push', 'origin', 'main'], repo.root, testEnv({ AI_E2E_ASSUME: 'yes' }));
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stderr, /CLI not found/);

@@ -112,7 +112,7 @@ export async function runPrePushHook(params) {
                 });
                 const job = await runJob({ repoRoot: root, jobId: result.job.id, log });
                 if (job.status === 'succeeded') {
-                    say(`tests passed locally and were committed (job ${job.id}). Push continues.`);
+                    say(`tests passed locally and were committed (job ${job.id}). Push continues; the test commit is pushed right after it and you will be notified when all is done.`);
                     return 'started';
                 }
                 if (job.status === 'skipped') {

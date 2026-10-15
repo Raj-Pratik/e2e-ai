@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
-import { askYesNo, isAffirmative } from '../src/prompt.js';
+import { askYesNo, isAffirmative, selectOption } from '../src/prompt.js';
 
 function io(answer?: string, end = false) {
   const input = new PassThrough();
@@ -38,5 +38,22 @@ describe('interactive prompt', () => {
     assert.ok(isAffirmative(' y '));
     assert.ok(!isAffirmative(''));
     assert.ok(!isAffirmative('no'));
+  });
+
+  const options = [{ value: 'copilot', label: 'copilot' }, { value: 'claude', label: 'claude' }];
+
+  it('select list returns only listed values and re-asks on anything else', async () => {
+    const stream = io('nonsense\n2\n');
+    assert.equal(await selectOption('Provider?', options, stream), 'claude');
+    assert.match(stream.written(), /Please pick one of the listed numbers/);
+    assert.equal(await selectOption('Provider?', options, io('\n')), 'copilot');
+    assert.equal(await selectOption('Provider?', options, io(undefined, true)), null);
+  });
+
+  it('select list moves with arrow keys in a raw terminal', async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => undefined });
+    const output = new PassThrough();
+    setImmediate(() => { input.write('\x1b[B'); setImmediate(() => input.write('\r')); });
+    assert.equal(await selectOption('Provider?', options, { input, output }), 'claude');
   });
 });
