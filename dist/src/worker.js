@@ -7,20 +7,22 @@ import { AiE2eError, errorMessage } from './errors.js';
 import { git, listFiles, statusSnapshot } from './git.js';
 import { JobStore } from './jobs.js';
 import { createLogger } from './log.js';
-import { detectPlaywright, isWithin, isTestFile, testCommand } from './playwright.js';
+import { detectPlaywright, isWithin, isTestFile } from './playwright.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { resolveHookTarget } from './hookInstall.js';
-import { askYesNo, openTerminal } from './prompt.js';
+import { notifyUser } from './notify.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, secretEnvNames } from './providers/index.js';
 import { redact } from './redact.js';
 import { parsePrePushInput } from './refs.js';
 import { buildTask, DONE_FILE } from './taskPrompt.js';
+import { CLI_FILE, currentVerification, readVerification, verifyCommandLine, VERIFIED_FILE, writeBaseline } from './verify.js';
 export const REFS_FILE = 'refs.txt';
 export const TASK_FILE = 'task.md';
 /** Commit trailer marking ai-e2e generated test commits; pushes containing only these skip the prompt. */
 export const GENERATED_TRAILER = 'AI-E2E-Job';
 const SNAPSHOT_MAX_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_HEALING_ATTEMPTS = 3;
+/** Non-interactive sessions that stop before a passing verify run are resumed this many times. */
+const MAX_CONTINUATIONS = 5;
 class SkipJob extends Error {
 }
 function snapshotFiles(root, files) {
@@ -111,33 +113,6 @@ async function restoreExistingTests(root, jobDir, before, allowModify, log) {
     }
     return { patches, warnings };
 }
-export async function runGeneratedTests(root, config, setup, specs, log, signal) {
-    const command = testCommand(root, config, setup, specs);
-    if (!command) {
-        throw new AiE2eError('No runnable Playwright command. Run `pushpilot playwright-init --yes` or configure playwright.testCommand.');
-    }
-    log(`Running generated tests: ${command.join(' ')}`);
-    const out = lineWriter(log, '[playwright] ');
-    const result = await runProcess(command[0], command.slice(1), {
-        cwd: root,
-        timeoutMs: config.playwright.testTimeoutSeconds * 1000,
-        maxOutputBytes: config.generation.maxOutputBytes,
-        killProcessGroup: true,
-        onOutput: (chunk) => out.write(chunk),
-        ...(signal ? { signal } : {}),
-    });
-    out.flush();
-    if (result.error)
-        log(`Test command could not start: ${result.error.message}`);
-    // A sentinel or exit zero (including an all-skipped suite) is not evidence of execution.
-    const output = `${result.stdout}\n${result.stderr}`.replace(/\u001b\[[0-9;]*m/g, '');
-    const passedCount = /\b([1-9]\d*) passed\b/.test(output);
-    const skipped = /\b[1-9]\d* (?:skipped|failed|deselected)\b/.test(output);
-    const passed = result.exitCode === 0 && !result.timedOut && !result.aborted && passedCount && !skipped;
-    log(passed ? 'Generated tests passed.' : `Generated tests failed (exit ${result.exitCode ?? result.signal}${result.timedOut ? ', timed out' : ''}).`);
-    const failureOutput = passed ? undefined : redact(`${output}\n${!passedCount ? 'No positive passed-test count found. Configure a text reporter (Playwright list/line or pytest terminal summary).' : ''}`.trim().slice(-12_000));
-    return { command, exitCode: result.exitCode, passed, timedOut: result.timedOut, ...(failureOutput ? { failureOutput } : {}) };
-}
 function summarize(job, setup) {
     if (!job.generatedFiles.length)
         return 'No new test files were generated.';
@@ -171,10 +146,18 @@ function openUserTerminal() {
             fs.closeSync(ttyFd);
     }
 }
+/** PID of the `git push` that ran the hook: the hook shell is our parent, git is its parent. */
+function gitPushPid() {
+    if (process.platform === 'win32')
+        return null;
+    const out = spawnSync('ps', ['-o', 'ppid=', '-p', String(process.ppid)], { encoding: 'utf8' }).stdout?.trim();
+    const pid = Number(out);
+    return Number.isInteger(pid) && pid > 1 ? pid : null;
+}
 function scheduleFollowUpPush(root, remote, refs, logFile, commit) {
     const ref = refs.find((candidate) => candidate.localRef.startsWith('refs/heads/') && candidate.remoteRef.startsWith('refs/heads/'));
-    const cli = process.argv[1];
-    if (!ref || !cli)
+    const cli = CLI_FILE;
+    if (!ref)
         throw new AiE2eError('Could not schedule the follow-up push: branch ref or CLI path is unavailable.');
     const output = openUserTerminal() ?? fs.openSync(logFile, 'a');
     const child = spawn(process.execPath, [
@@ -192,7 +175,7 @@ function scheduleFollowUpPush(root, remote, refs, logFile, commit) {
         cwd: root,
         detached: true,
         stdio: ['ignore', output, output],
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', AI_E2E_PUSH_PID: String(gitPushPid() ?? '') },
     });
     child.once('error', (error) => {
         fs.appendFileSync(logFile, `PushPilot: follow-up publisher could not start: ${error.message}. Review the local commit and run git push.\n`);
@@ -219,7 +202,7 @@ export async function runJob(options) {
     }
     log(`Job ${jobId} started (pid ${process.pid}, provider ${job.provider}, repo ${root}).`);
     try {
-        const deadline = Date.now() + config.generation.timeoutSeconds * 1000;
+        const deadline = config.generation.timeoutSeconds ? Date.now() + config.generation.timeoutSeconds * 1000 : null;
         const headBefore = (await git(root, ['rev-parse', 'HEAD'])).trim();
         const interactive = config.generation.interactive && hasInteractiveTerminal();
         const setup = await detectPlaywright(root, config);
@@ -250,10 +233,6 @@ export async function runJob(options) {
             throw new AiE2eError(`${provider.displayName} is unavailable: ${availability.reason}`);
         log(`Provider ${provider.displayName}: ${availability.resolvedPath} (${availability.version ?? 'unknown version'}).`);
         log('The coding CLI plans, writes and runs the tests itself (no Playwright sub-agents or MCP).');
-        const taskFile = path.join(jobDir, TASK_FILE);
-        fs.writeFileSync(taskFile, buildTask({ repoRoot: root, jobDir, changeSet, setup, config, mcp: null, mcpNote: 'not used' }));
-        const taskRel = path.relative(root, taskFile).split(path.sep).join('/');
-        const instruction = `Read the task specification in \`${taskRel}\` and complete it exactly. Follow every rule in that file.`;
         const scanDirs = [...new Set([setup.testDir, setup.outputDir])];
         if (scanDirs.some((dir) => dir === '.' || dir.startsWith('..') || path.isAbsolute(dir))) {
             throw new AiE2eError('Configure a dedicated repository-relative playwright.testDir; the repository root is not a safe test allowlist.');
@@ -269,13 +248,19 @@ export async function runJob(options) {
             throw new AiE2eError(`Working tree must be clean before generation; preserve and review these changes first: ${relevantDirty.join(', ')}`);
         const setupBefore = snapshotFiles(root, [...owned]);
         const indexBefore = [...statusBefore].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
+        await writeBaseline(root, jobDir, scanDirs);
+        fs.rmSync(path.join(jobDir, VERIFIED_FILE), { force: true });
+        const verifyCommand = verifyCommandLine(CLI_FILE, jobId);
+        const taskFile = path.join(jobDir, TASK_FILE);
+        fs.writeFileSync(taskFile, buildTask({ repoRoot: root, jobDir, changeSet, setup, config, mcp: null, mcpNote: 'not used', verifyCommand }));
+        const taskRel = path.relative(root, taskFile).split(path.sep).join('/');
+        const instruction = `Read the task specification in \`${taskRel}\` and complete it exactly. Follow every rule in that file.`;
         const providerOut = lineWriter(log, `[${provider.id}] `);
         const doneFile = path.join(jobDir, DONE_FILE);
         const readDone = () => {
             try {
                 const done = JSON.parse(fs.readFileSync(doneFile, 'utf8'));
-                return done && ['passed', 'not-needed', 'blocked'].includes(done.status ?? '') &&
-                    (done.status === 'passed' || (typeof done.reason === 'string' && done.reason.trim().length > 0)) ? done : null;
+                return done && ['not-needed', 'blocked'].includes(done.status ?? '') && typeof done.reason === 'string' && done.reason.trim().length > 0 ? done : null;
             }
             catch {
                 return null;
@@ -284,7 +269,7 @@ export async function runJob(options) {
         const runProvider = async (model, prompt) => {
             if (signal?.aborted)
                 throw new AiE2eError('Generation interrupted.');
-            if (Date.now() >= deadline)
+            if (deadline !== null && Date.now() >= deadline)
                 throw new AiE2eError('Generation deadline reached; inspect the job log and resolve the blocker before retrying.');
             fs.rmSync(doneFile, { force: true });
             const invocation = provider.buildInvocation({
@@ -294,37 +279,31 @@ export async function runJob(options) {
                 mcp: null,
                 secretEnvNames: secretEnvNames(process.env),
                 interactive,
+                verifyCommand,
             });
-            log(`Invoking ${invocation.command}${model ? ` with model ${model}` : ''} (timeout ${config.generation.timeoutSeconds}s).`);
+            log(`Invoking ${invocation.command}${model ? ` with model ${model}` : ''} (${deadline === null ? 'no time limit' : `timeout ${config.generation.timeoutSeconds}s`}).`);
             return runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
                 cwd: root,
-                timeoutMs: deadline - Date.now(),
+                ...(deadline !== null ? { timeoutMs: deadline - Date.now() } : {}),
                 maxOutputBytes: config.generation.maxOutputBytes,
                 killProcessGroup: !interactive,
                 onOutput: (chunk) => providerOut.write(chunk),
                 interactive,
-                // The agent writes done.json when its tests pass (or it is blocked); then the session is closed for it.
-                stopWhen: () => readDone() !== null,
+                // A passing verify run (or a not-needed/blocked decision) ends the session; nothing else does.
+                stopWhen: () => readVerification(jobDir) !== null || readDone() !== null,
                 ...(signal ? { signal } : {}),
             });
         };
-        const finishPhase = async (attempt) => {
-            providerOut.flush();
-            if (attempt.aborted || attempt.timedOut || attempt.error)
-                return;
-            if (attempt.completed)
-                log('Agent reported completion; the coding CLI session was closed automatically.');
-            const done = readDone();
-            if (done?.status === 'not-needed') {
-                const dirty = [...(await statusSnapshot(root)).keys()].filter((file) => !isIgnoredDirty(file));
-                if (dirty.length || (await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore) {
-                    throw new AiE2eError('Agent reported not-needed but changed the repository. Review changes; push blocked.');
-                }
-                throw new SkipJob(`agent decided no E2E test is needed: ${redact(done.reason ?? 'non-product change')}`);
-            }
-            if (done?.status === 'blocked') {
-                throw new AiE2eError(`The agent reported a blocker: ${redact(done.reason ?? 'no reason given')}`);
-            }
+        const failure = (attempt) => {
+            if (attempt.aborted)
+                return 'interrupted';
+            if (attempt.timedOut)
+                return `timed out after ${config.generation.timeoutSeconds}s`;
+            if (attempt.error)
+                return attempt.error.message;
+            if (!attempt.completed && attempt.exitCode !== 0)
+                return `exit code ${attempt.exitCode ?? attempt.signal}`;
+            return null;
         };
         const runWithFallbacks = async (prompt) => {
             let attempt = await runProvider(settings.model, prompt);
@@ -337,23 +316,34 @@ export async function runJob(options) {
             return attempt;
         };
         let result = await runWithFallbacks(instruction);
-        await finishPhase(result);
+        // Print-mode CLIs can stop on their own (turn limits); resume them until verify passes.
+        for (let continuation = 1; !interactive && continuation <= MAX_CONTINUATIONS; continuation += 1) {
+            if (failure(result) || readVerification(jobDir) || readDone())
+                break;
+            log(`Coding CLI stopped before a passing verify run; resuming (${continuation}/${MAX_CONTINUATIONS}).`);
+            result = await runWithFallbacks(`Read the task specification in \`${taskRel}\`. The plan in the job directory is approved. ` +
+                `Continue from the current files: run \`${verifyCommand}\`, fix the generated specs/helpers on failure and rerun until it reports PASSED.`);
+        }
+        providerOut.flush();
+        if (result.completed)
+            log('Agent reported completion; the coding CLI session was closed automatically.');
+        const reason = failure(result);
+        if (reason)
+            throw new AiE2eError(`${provider.displayName} failed: ${reason}. ${redact(result.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
+        const done = readDone();
+        if (done?.status === 'not-needed') {
+            const dirty = [...(await statusSnapshot(root)).keys()].filter((file) => !isIgnoredDirty(file));
+            if (dirty.length || (await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore) {
+                throw new AiE2eError('Agent reported not-needed but changed the repository. Review changes; push blocked.');
+            }
+            throw new SkipJob(`agent decided no E2E test is needed: ${redact(done.reason ?? 'non-product change')}`);
+        }
+        if (done?.status === 'blocked')
+            throw new AiE2eError(`The agent reported a blocker: ${redact(done.reason ?? 'no reason given')}`);
         const restored = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
-        const listedAfter = await listFiles(root, scanDirs);
-        const known = new Set(listedBefore);
-        const changedTests = (files) => files.filter((file) => {
-            const abs = path.join(root, file);
-            if (!fs.existsSync(abs))
-                return false;
-            if (!known.has(file))
-                return true;
-            const original = before.files.get(file);
-            return original !== null && original !== undefined && !fs.readFileSync(abs).equals(original);
-        }).sort();
-        let generatedFiles = changedTests(listedAfter);
         const warnings = [...restored.warnings];
         const statusAfter = await statusSnapshot(root);
-        const outside = [...statusAfter.keys()].filter((p) => statusAfter.get(p) !== statusBefore.get(p) && !scanDirs.some((d) => isWithin(d, p)) && !p.startsWith(`${path.relative(root, store.stateDir)}/`));
+        const outside = [...statusAfter.keys()].filter((p) => statusAfter.get(p) !== statusBefore.get(p) && !scanDirs.some((d) => isWithin(d, p)) && !p.startsWith(`${stateRelative}/`));
         if (outside.length)
             warnings.push(`Files outside the test directories changed during generation (review manually): ${outside.join(', ')}`);
         const indexAfter = [...statusAfter].filter(([, code]) => code[0] !== ' ' && code[0] !== '?').map(([p, c]) => `${c}${p}`).sort().join('\n');
@@ -361,138 +351,41 @@ export async function runJob(options) {
             warnings.push('The Git index changed during generation; review `git status` before committing.');
         for (const warning of warnings)
             log(`WARNING: ${warning}`);
-        job = store.update(jobId, { generatedFiles, proposedPatches: restored.patches, warnings });
-        if (result.error || result.aborted || result.timedOut || (!result.completed && result.exitCode !== 0)) {
-            const reason = result.aborted
-                ? 'interrupted'
-                : result.timedOut
-                    ? `timed out after ${config.generation.timeoutSeconds}s`
-                    : result.error
-                        ? result.error.message
-                        : `exit code ${result.exitCode ?? result.signal}`;
-            throw new AiE2eError(`${provider.displayName} failed: ${reason}. ${redact(result.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
-        }
+        job = store.update(jobId, { proposedPatches: restored.patches, warnings });
         const planFile = path.join(jobDir, 'plan.md');
         if (!fs.existsSync(planFile) || fs.statSync(planFile).size === 0) {
             throw new AiE2eError('The agent did not write an approved plan (plan.md); no tests may be generated.');
         }
-        const relevantSpecs = (files) => [...new Set([
-                ...files.filter(isTestFile),
-                ...(files.some((file) => !isTestFile(file)) ? setup.testFiles : []),
-            ])].sort();
-        const specs = relevantSpecs(generatedFiles);
-        if (!specs.length) {
-            throw new AiE2eError('The coding CLI finished without adding or patching a Playwright spec. The push is blocked; no test result can be assumed.');
+        // The coding CLI ran the tests itself through `pushpilot verify`; trust that run only if nothing changed since.
+        const newOnly = !config.generation.allowModifyExistingTests;
+        const verification = await currentVerification(root, jobDir, newOnly);
+        if (!verification.ok) {
+            throw new AiE2eError(`The coding CLI session ended without a passing verify run (${verification.reason}). Test files are preserved, uncommitted; the push is blocked.`);
         }
-        let testRun;
-        let verifiedFiles;
-        let currentSpecs = specs;
-        for (let healingAttempt = 0; healingAttempt <= MAX_HEALING_ATTEMPTS; healingAttempt += 1) {
-            if (Date.now() >= deadline || signal?.aborted)
-                throw new AiE2eError('Generation deadline reached or cancelled; inspect the job log before retrying.');
-            const boundedConfig = { ...config, playwright: { ...config.playwright, testTimeoutSeconds: Math.min(config.playwright.testTimeoutSeconds, (deadline - Date.now()) / 1000) } };
-            const testInputs = snapshotFiles(root, [...new Set([...generatedFiles, ...currentSpecs])]);
-            testRun = (await runGeneratedTests(root, boundedConfig, setup, currentSpecs, log, signal)) ?? undefined;
-            if (testRun)
-                job = store.update(jobId, { testRun });
-            if (testRun?.passed) {
-                verifiedFiles = testInputs;
-                break;
-            }
-            if (!testRun)
-                throw new AiE2eError('No independent test run was recorded.');
-            if (healingAttempt === MAX_HEALING_ATTEMPTS) {
-                throw new AiE2eError(`Generated Playwright tests did not pass after ${MAX_HEALING_ATTEMPTS} healing attempt(s); the push is blocked.`);
-            }
-            const repairPrompt = `Read the task specification at \`${taskRel}\`. The approved Playwright plan is at \`${path.relative(root, planFile).split(path.sep).join('/')}\`.
-The newly generated specs are: ${currentSpecs.map((spec) => `\`${spec}\``).join(', ')}.
-The last Playwright run failed. Act as the repair engineer: determine the correct commands needed to inspect and rerun
-the test, use the repository's Playwright configuration, and patch only these generated specs or their generated helpers.
-If the failure is an authentication or environment prerequisite, ask the user for the missing input or permission in
-this terminal; do not invent credentials or silently skip the test. If shell execution is denied, report the exact
-permission required so the worker can surface it. Do not ask for plan approval again, do not create unrelated files,
-and do not claim success without running the exact Playwright command. Keep fixing and rerunning in a loop until the
-tests pass. When they pass, write \`${path.relative(root, doneFile).split(path.sep).join('/')}\` containing
-\`{"status":"passed"}\`; PushPilot then closes this session automatically. Only if a blocker cannot be resolved even with
-the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\` to that file instead.
-
-## Exact failed command
-\`${testRun.command.join(' ')}\`
-
-## Playwright failure report
-${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no reporter output was captured; inspect the Playwright artifacts)'}
-
-## Relevant artifacts
-- Job directory: \`${path.relative(root, jobDir).split(path.sep).join('/')}\`
-- Playwright output directory: \`${setup.outputDir}\`
-- Generated specs: ${currentSpecs.join(', ')}`;
-            log(`Invoking coding CLI repair phase (attempt ${healingAttempt + 1}/${MAX_HEALING_ATTEMPTS}).`);
-            const healingResult = await runWithFallbacks(repairPrompt);
-            await finishPhase(healingResult);
-            if (healingResult.error || healingResult.aborted || healingResult.timedOut || (!healingResult.completed && healingResult.exitCode !== 0)) {
-                const reason = healingResult.aborted
-                    ? 'interrupted'
-                    : healingResult.timedOut
-                        ? `timed out after ${config.generation.timeoutSeconds}s`
-                        : healingResult.error
-                            ? healingResult.error.message
-                            : `exit code ${healingResult.exitCode ?? healingResult.signal}`;
-                throw new AiE2eError(`Coding CLI repair phase failed: ${reason}. ${redact(healingResult.stderr.trim().split('\n').slice(-5).join(' | '))}`.trim());
-            }
-            const healed = await restoreExistingTests(root, jobDir, before, config.generation.allowModifyExistingTests, log);
-            restored.patches.push(...healed.patches);
-            restored.warnings.push(...healed.warnings);
-            const afterHealing = await listFiles(root, scanDirs);
-            currentSpecs = relevantSpecs(changedTests(afterHealing));
-            if (!currentSpecs.length)
-                throw new AiE2eError('The repair agent removed every generated Playwright spec; the push is blocked.');
-            generatedFiles = changedTests(afterHealing);
-        }
-        const finalStatus = await statusSnapshot(root);
+        const testRun = verification.record.testRun;
+        const generatedFiles = Object.keys(verification.record.files).sort();
+        job = store.update(jobId, { generatedFiles, testRun });
+        log(`Verified passing run of ${verification.record.specs.join(', ')} at ${verification.record.verifiedAt}.`);
         for (const warning of restoreSetupFiles(root, setupBefore))
             log(warning);
         const allowed = new Set(generatedFiles.filter((file) => scanDirs.some((dir) => isWithin(dir, file)) && /\.(?:[cm]?[jt]sx?|py)$/.test(file) &&
             fs.lstatSync(path.join(root, file)).isFile() &&
             fs.realpathSync(path.join(root, file)).startsWith(`${fs.realpathSync(root)}${path.sep}`)));
-        const unsafe = [...finalStatus.keys()].filter((file) => !isIgnoredDirty(file) && !allowed.has(file));
-        if (unsafe.length || generatedFiles.some((file) => !allowed.has(file))) {
-            throw new AiE2eError(`Changes outside allowed test source files detected; nothing committed. Review: ${unsafe.join(', ') || generatedFiles.join(', ')}`);
-        }
-        if ((await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore ||
-            (await git(root, ['diff', '--cached', '--name-only'])).trim()) {
-            throw new AiE2eError('HEAD or Git index changed during generation; nothing committed. Review manually.');
-        }
-        if (!testRun?.passed)
-            throw new AiE2eError('Independent test verification did not pass.');
-        const assertVerifiedUnchanged = async () => {
-            for (const [file, content] of verifiedFiles?.files ?? []) {
-                if (!content || !fs.existsSync(path.join(root, file)) || !fs.readFileSync(path.join(root, file)).equals(content)) {
-                    throw new AiE2eError(`Test input changed during/after verification or exceeded snapshot limit: ${file}. Nothing committed; rerun verification.`);
-                }
+        const assertCommittable = async () => {
+            const unsafe = [...(await statusSnapshot(root)).keys()].filter((file) => !isIgnoredDirty(file) && !allowed.has(file));
+            if (unsafe.length || generatedFiles.some((file) => !allowed.has(file))) {
+                throw new AiE2eError(`Changes outside allowed test source files detected; nothing committed. Review: ${unsafe.join(', ') || generatedFiles.join(', ')}`);
             }
             if (signal.aborted || (await git(root, ['rev-parse', 'HEAD'])).trim() !== headBefore ||
-                (await git(root, ['diff', '--cached', '--name-only'])).trim() ||
-                [...(await statusSnapshot(root)).keys()].some((file) => !isIgnoredDirty(file) && !allowed.has(file))) {
-                throw new AiE2eError('Repository changed or generation was cancelled after verification. Nothing committed; review and retry.');
+                (await git(root, ['diff', '--cached', '--name-only'])).trim()) {
+                throw new AiE2eError('HEAD or Git index changed during generation, or it was cancelled; nothing committed. Review manually.');
             }
+            if (!(await currentVerification(root, jobDir, newOnly)).ok)
+                throw new AiE2eError('Test files changed after the passing verify run; nothing committed.');
         };
-        await assertVerifiedUnchanged();
-        job = store.update(jobId, { generatedFiles, proposedPatches: restored.patches });
+        await assertCommittable();
         if (config.generation.commitGeneratedTests) {
-            const terminal = (options.openReviewTerminal ?? openTerminal)();
-            if (!terminal)
-                throw new AiE2eError('Tests passed but committing requires human review in an interactive terminal. No commit was made.');
-            try {
-                terminal.output.write(`PushPilot verified these test changes:\n${generatedFiles.join('\n')}\n`);
-                terminal.output.write(await git(root, ['diff', '--stat', '--', ...generatedFiles]));
-                if (await askYesNo('Have you reviewed and approved committing these test files? [y/N] ', terminal, config.prompt.timeoutSeconds * 1000) !== 'yes') {
-                    throw new AiE2eError('Commit approval declined or timed out. Test changes are preserved, uncommitted.');
-                }
-            }
-            finally {
-                terminal.close();
-            }
-            await assertVerifiedUnchanged();
+            log(`Committing verified test files:\n${generatedFiles.join('\n')}`);
             await git(root, ['add', '--', ...generatedFiles]);
             await git(root, [
                 'commit',
@@ -500,7 +393,7 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
                 '-m',
                 'test: add generated Playwright coverage',
                 '-m',
-                `${GENERATED_TRAILER}: ${jobId}\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`,
+                `${GENERATED_TRAILER}: ${jobId}\n${provider.id === 'claude' ? 'Co-authored-by: Claude <noreply@anthropic.com>' : 'Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>'}`,
                 '--',
                 ...generatedFiles,
             ]);
@@ -511,17 +404,23 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
                 if (!job.remote)
                     throw new AiE2eError('Generated tests were committed, but the pre-push remote is unavailable for publishing.');
                 scheduleFollowUpPush(root, job.remote, refs, store.logFile(jobId), generatedCommit);
-                log('Your push continues now; the generated-test commit is pushed automatically right after it, and you will be told when it is done.');
+                log('Your push continues now; the generated-test commit is pushed automatically right after it, and you will be notified when it is done.');
+            }
+            else {
+                notifyUser('PushPilot', `Verified E2E tests committed locally (${generatedCommit.slice(0, 12)}).`);
             }
         }
-        const summary = summarize({ generatedFiles, proposedPatches: restored.patches, ...(testRun ? { testRun } : {}) }, setup);
+        else {
+            notifyUser('PushPilot', 'Verified E2E tests are ready (uncommitted).');
+        }
+        const summary = summarize({ generatedFiles, proposedPatches: restored.patches, testRun }, setup);
         log(summary);
         job = store.update(jobId, {
             status: 'succeeded',
             exitCode: 0,
             finishedAt: new Date().toISOString(),
             summary,
-            ...(testRun ? { testRun } : {}),
+            testRun,
         });
     }
     catch (error) {
@@ -534,6 +433,8 @@ ${testRun.failureOutput ? `\`\`\`\n${testRun.failureOutput}\n\`\`\`` : '(no repo
             finishedAt: new Date().toISOString(),
             ...(skipped ? { summary: message } : { error: message }),
         });
+        if (!skipped)
+            notifyUser('PushPilot: generation failed', message);
     }
     finally {
         if (!options.signal) {

@@ -17,6 +17,8 @@ process.env.GIT_CONFIG_NOSYSTEM = '1';
 process.env.GIT_CEILING_DIRECTORIES = path.resolve(here, '../../.test-work');
 process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`;
 for (const key of Object.keys(process.env)) if (key.startsWith('AI_E2E_') || key.startsWith('FAKE_')) delete process.env[key];
+// Never pop real desktop notifications from tests.
+process.env.AI_E2E_NO_NOTIFY = '1';
 
 export function tmpDir(prefix = 'ai-e2e-test-'): string {
   const base = path.resolve(here, '../../.test-work');
@@ -40,6 +42,7 @@ export function testEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CEILING_DIRECTORIES: path.resolve(here, '../../.test-work'),
     GIT_TERMINAL_PROMPT: '0',
+    AI_E2E_NO_NOTIFY: '1',
     ...extra,
   };
 }

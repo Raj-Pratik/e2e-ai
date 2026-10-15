@@ -87,6 +87,15 @@ describe('claude invocation', () => {
     assert.equal(args[args.indexOf('--disallowedTools') + 1], 'Bash');
   });
 
+  it('keeps an interactive session open (no -p) and always allows the verify command', () => {
+    const verifyCommand = '/usr/bin/node /opt/pushpilot/cli.js verify --job 20261016-000000-abcdef';
+    const { args } = claude.buildInvocation(request({ interactive: true, verifyCommand, settings: { ...defaultProviderSettings(), allowedShellCommands: [] } }));
+    assert.equal(args[0], request().instruction);
+    assert.ok(!args.includes('-p') && !args.includes('--max-turns') && !args.includes('--no-session-persistence'));
+    assert.ok(args.includes(`Bash(${verifyCommand})`));
+    assert.ok(!args.includes('Bash'), 'Bash must not be fully disallowed when verify is permitted');
+  });
+
   it('adds strict MCP config when Playwright MCP is enabled', () => {
     const { args } = claude.buildInvocation(request({ mcp: { name: 'playwright', command: 'npx', args: ['@playwright/mcp@latest'] } }));
     assert.ok(args.includes('--strict-mcp-config'));

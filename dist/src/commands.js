@@ -15,10 +15,12 @@ import { detectPlaywright } from './playwright.js';
 import { askChoice, openTerminal } from './prompt.js';
 import { hasInteractiveTerminal, runProcess } from './proc.js';
 import { detectProvider, getProvider, listProviders } from './providers/index.js';
+import { notifyUser } from './notify.js';
+import { runVerify } from './verify.js';
 import { runJob } from './worker.js';
 export class UsageError extends AiE2eError {
 }
-export const HELP = `PushPilot — approved, independently verified Playwright coverage for outgoing Git changes
+export const HELP = `PushPilot — approved, verified Playwright coverage for outgoing Git changes
 
 Usage: pushpilot <command> [options]
 
@@ -27,6 +29,7 @@ Commands:
   generate [--base <rev>] [--head <rev>] [--provider <id>] [--foreground] [--force]
                                       Generate tests for base..head (default: upstream..HEAD)
   push [git push options and refs]           Normal git push, using the installed pre-push hook
+  verify --job <id>                   Run only the job's new/edited specs (used by the coding CLI loop)
   publish-after-push --remote <name> --branch <name> --expected <sha> --commit <sha>
                                       Internal guarded follow-up push for generated tests
   status [<job-id>] [--json] [--limit <n>]
@@ -47,7 +50,7 @@ Environment:
 `;
 const COMMAND_HELP = {
     init: 'pushpilot init [--no-hook] [--force]\nSelect provider (default Copilot), preserve config, install hook, and run verified Playwright setup.\n--no-hook: skip hook installation. --force: insert into a managed hook with backup; never overwrite config.',
-    generate: 'pushpilot generate [--base REV] [--head REV] [--provider ID] [--foreground] [--force]\n--base: upstream or origin merge-base by default. --head: HEAD by default.\n--provider: copilot or claude. --force: retry duplicate changes.\n--foreground: compatibility flag; jobs always run in this terminal.\nRequires a clean tree and runnable Playwright; plan approval and independent verification are mandatory.',
+    generate: 'pushpilot generate [--base REV] [--head REV] [--provider ID] [--foreground] [--force]\n--base: upstream or origin merge-base by default. --head: HEAD by default.\n--provider: copilot or claude. --force: retry duplicate changes.\n--foreground: compatibility flag; jobs always run in this terminal.\nRequires a clean tree and runnable Playwright; plan approval and a passing verify run of the new/edited specs are mandatory.',
     push: 'pushpilot push [git push arguments]\nRuns normal git push. Install the hook with pushpilot init first.\nAll remaining arguments (remote, refs, --force-with-lease, etc.) go to Git.',
     status: 'pushpilot status [JOB] [--json] [--limit N]\nShow one job or recent jobs. --limit defaults to 10; --json emits machine-readable results.',
     logs: 'pushpilot logs [JOB] [--tail N]\nPrint the latest or selected job log. --tail defaults to 200 lines.',
@@ -57,6 +60,7 @@ const COMMAND_HELP = {
     uninstall: 'pushpilot uninstall\nRemove only the legacy-compatible hook block. Keep configuration, tests, state and unrelated hooks.',
     worker: 'pushpilot worker --job ID\nInternal foreground worker. Requires an existing job; not a normal user command.',
     hook: 'pushpilot hook pre-push REMOTE [URL]\nInternal Git hook entry point. Reads the standard pre-push ref list from stdin.',
+    verify: 'pushpilot verify --job ID\nRun only the spec files the coding CLI added or edited for this job (plus specs importing an added/edited helper).\nA passing run is recorded and ends the coding CLI session; PushPilot then commits and pushes the verified files.',
     'publish-after-push': 'pushpilot publish-after-push --remote NAME --branch NAME --expected SHA --commit SHA\nInternal bounded publisher. Waits for the original SHA, then pushes the pinned test commit through normal hooks.',
 };
 function parse(args, options) {
@@ -296,7 +300,25 @@ async function cmdPublishAfterPush(args, io) {
         throw new UsageError('publish-after-push requires --remote, --branch, --expected <sha> and --commit <sha>.');
     }
     const root = await findRepoRoot(io.cwd);
-    for (let attempt = 0; attempt < 60; attempt++) {
+    const done = (ok, message) => {
+        (ok ? io.out : io.err)(`\nPushPilot: ${message}\n`);
+        notifyUser(ok ? 'PushPilot: done' : 'PushPilot: push needs attention', message, io.env);
+        return ok ? 0 : 1;
+    };
+    // Waits for the original push for as long as its git process is alive (large pushes and slow hooks take time).
+    const parent = Number(io.env.AI_E2E_PUSH_PID);
+    const pushAlive = () => {
+        if (!Number.isInteger(parent) || parent <= 1)
+            return false;
+        try {
+            process.kill(parent, 0);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    };
+    for (let attempt = 0; attempt < 120 || pushAlive(); attempt++) {
         const observation = await runProcess('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: root, timeoutMs: 5000, env: { ...io.env, GIT_TERMINAL_PROMPT: '0' } });
         const remoteSha = observation.exitCode === 0 ? observation.stdout.trim().split(/\s+/)[0] : null;
         if (remoteSha === expected) {
@@ -306,17 +328,26 @@ async function cmdPublishAfterPush(args, io) {
                 timeoutMs: 10 * 60 * 1000,
                 maxOutputBytes: 64 * 1024 * 1024,
             });
-            if (result.exitCode === 0) {
-                io.out(`\nPushPilot: Done. Verified E2E tests were pushed to ${remote}/${branch} (${commit.slice(0, 12)}).\n`);
-                return 0;
-            }
-            io.err(`\nPushPilot: follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}\nReview the local test commit and run normal \`git push\` to publish it.\n`);
-            return 1;
+            if (result.exitCode === 0)
+                return done(true, `Done. Verified E2E tests were committed and pushed to ${remote}/${branch} (${commit.slice(0, 12)}).`);
+            return done(false, `follow-up push failed: ${result.stderr.trim() || `exit code ${result.exitCode}`}. Review the local test commit and run normal \`git push\` to publish it.`);
         }
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    io.err('\nPushPilot: original push was not observed on the remote; tests remain committed locally. Inspect the remote and run normal `git push` to publish them.\n');
-    return 1;
+    return done(false, 'original push was not observed on the remote; tests remain committed locally. Inspect the remote and run normal `git push` to publish them.');
+}
+async function cmdVerify(args, io) {
+    const { values } = parse(args, { job: { type: 'string' } });
+    const jobId = values.job;
+    if (typeof jobId !== 'string' || !isValidJobId(jobId))
+        throw new UsageError('verify requires --job <id>.');
+    const { root, loaded: { config }, store } = await context(io);
+    if (!store.read(jobId))
+        throw new AiE2eError(`Job ${jobId} not found.`);
+    const setup = await detectPlaywright(root, config);
+    const log = createLogger((text) => fs.appendFileSync(store.logFile(jobId), text));
+    const testRun = await runVerify({ root, jobDir: store.jobDir(jobId), config, setup, write: io.out, log });
+    return testRun.passed ? 0 : 1;
 }
 async function cmdStatus(args, io) {
     const { values, positionals } = parse(args, { json: { type: 'boolean' }, limit: { type: 'string' } });
@@ -467,7 +498,7 @@ async function cmdPlaywrightInit(args, io) {
     const result = await runProcess(availability.resolvedPath ?? invocation.command, invocation.args, {
         cwd: root,
         interactive: true,
-        timeoutMs: config.generation.timeoutSeconds * 1000,
+        ...(config.generation.timeoutSeconds ? { timeoutMs: config.generation.timeoutSeconds * 1000 } : {}),
         onOutput: (chunk) => io.out(chunk),
     });
     if (result.exitCode !== 0)
@@ -532,6 +563,7 @@ const COMMANDS = {
     generate: cmdGenerate,
     push: cmdPush,
     'publish-after-push': cmdPublishAfterPush,
+    verify: cmdVerify,
     status: cmdStatus,
     logs: cmdLogs,
     config: cmdConfig,

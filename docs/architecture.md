@@ -19,27 +19,32 @@ The worker requires a dedicated test directory and a clean starting tree. It sna
 existing files, builds outgoing context, and launches the main provider. The task asks
 for explicit plan approval before edits. **This in-session plan gate is enforced by
 the coding CLI's instructions, not an independently authenticated approval protocol.**
-The worker also obtains a separate human commit approval after independent execution.
 Do not treat an agent-authored plan or sentinel as proof of user approval.
 
-`done.json` accepts only known statuses. It requests process shutdown, not test success.
-The worker independently executes added/modified specs, requires exit zero and a positive
-text-reporter passed count with no skipped/failed/deselected count, and retries at most
-three repair sessions within the generation deadline. This prevents accidental no-op
-and all-skipped success, but cannot establish that arbitrary configured commands or
-AI-authored tests are honest. Configured commands are trusted repository code.
+The worker hashes the test directories into `baseline.json` before launching the provider.
+The task tells the agent to loop on `pushpilot verify --job <id>`, which runs only files that
+differ from the baseline (plus specs that transitively import a changed helper) and, on a pass,
+writes `verified.json` with the hashes it ran against. The worker's `stopWhen` closes the session
+when `verified.json` (or a not-needed/blocked `done.json`) appears; nothing else ends it, and there
+is no default deadline. After the session PushPilot runs no tests: it requires the current changed
+set to match `verified.json` exactly. `verify` requires exit zero and a positive passed count with
+no skipped/failed/flaky/deselected count. Print-mode providers that stop early are resumed up to
+five times. This cannot establish that AI-authored tests are honest; configured commands are
+trusted repository code.
 
 Before committing, changed paths must be test-directory source files, regular files,
 and resolve inside the repository; deletions/unrelated files/changed HEAD or index block.
-Only those paths are staged/committed, after explicit human review confirmation. Legacy
+Only those paths are staged/committed, automatically, without a review prompt. Legacy
 read-only-test mode restores modified existing files and saves proposals.
 
 After committing, a separate publisher observes the original remote SHA and pushes the
 **pinned generated SHA**, never a later HEAD. It uses normal Git hooks with no bypass.
 A generated trailer alone cannot suppress the prompt: a matching successful local job
 receipt and passing test run are also required. Receipts are local operational state,
-not a cryptographic security boundary. Remote updates, authentication failure, or a
-polling deadline leave the local commit for manual publication.
+not a cryptographic security boundary. It waits while the original `git push` process is alive
+(then 2 more minutes). Remote updates, authentication failure, or the original push never
+landing leave the local commit for manual publication. Success or failure sends a desktop
+notification (`osascript`/`notify-send`; `AI_E2E_NO_NOTIFY=1` disables it).
 
 ## Runners and processes
 

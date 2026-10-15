@@ -15,6 +15,8 @@ export interface ProviderRequest {
   /** Names (never values) of environment variables that look secret. */
   secretEnvNames: string[];
   interactive?: boolean;
+  /** Exact `pushpilot verify` command line the agent must be allowed to run. */
+  verifyCommand?: string;
 }
 
 export interface Invocation {

@@ -3,8 +3,8 @@
 PushPilot adds an optional, approved Playwright workflow to **normal `git push`**.
 It uses your main GitHub Copilot CLI (default) or Claude Code session to inspect outgoing
 commits, read existing coverage, propose a plan, and add **or patch** browser tests.
-The coding CLI runs and repairs tests; PushPilot independently reruns them before asking
-you to review and approve a test-only commit.
+The coding CLI runs and repairs only the new/edited tests until they pass; PushPilot then
+commits and pushes exactly the verified files and notifies you.
 
 ## Install
 
@@ -88,21 +88,24 @@ runs tests. Run `pushpilot playwright-init --yes` separately to set up Playwrigh
 2. **No / Enter / timeout:** generation is not run; normal Git and other hooks continue.
 3. **Yes:** the main coding CLI evaluates coverage needs and reads existing tests.
    It shows a plan and waits for your explicit approval before editing coverage.
-4. It adds or patches tests/helpers and runs relevant tests, inspecting failures and
-   reports/traces until they pass, you cancel, or a genuine prerequisite blocks progress.
-5. Its `done.json` signal closes the coding session. PushPilot independently reruns
-   changed specs. Exit zero without a positive passed-test count is not enough.
-6. You review and explicitly approve a test-only commit. PushPilot refuses dirty
-   starting trees, unrelated edits, deleted files, or changes to HEAD/index.
-7. The original push completes; a bounded follow-up normal push publishes the exact
-   generated commit. Other pre-push policies still run. Publishing failures leave
-   tests committed locally and report recovery instructions.
+4. It adds or patches tests/helpers, then loops on `pushpilot verify --job <id>` inside its
+   own session. `verify` runs **only** the specs it added or edited (plus existing specs that
+   import a helper it added or edited), never the whole suite. On failure the agent reads the
+   report/traces, fixes the tests and reruns, for as long as it takes. There is no time limit.
+5. The first passing `verify` run closes the coding session. PushPilot does **not** rerun tests
+   afterwards: it only checks the files are byte-identical to the verified run. Exit zero without
+   a positive passed-test count, or any skipped/failed/flaky test, never counts as passing.
+6. PushPilot commits exactly the verified test files (refusing dirty starting trees, unrelated
+   edits, deleted files, or changes to HEAD/index).
+7. The original push completes; a follow-up normal push publishes the exact generated commit
+   once the original push lands, then sends a desktop notification. Other pre-push policies
+   still run. Publishing failures leave tests committed locally and report recovery instructions.
 
 A coverage-not-needed decision includes a reason and must leave the repository unchanged.
 Failures after accepting generation block the push and preserve files for review. Ctrl-C
-cancels; the default generation deadline is 900 seconds with at most three worker repair
-sessions. Inspect `pushpilot logs` for blockers. Do not accept a plan that hides failures
-with skipped tests or requires production access.
+cancels. `generation.timeoutSeconds` and `playwright.testTimeoutSeconds` default to `null`
+(no limit); set them only if you want a hard cap. Inspect `pushpilot logs` for blockers. Do not
+accept a plan that hides failures with skipped tests or requires production access.
 
 ## Commands and flags
 
@@ -111,6 +114,7 @@ with skipped tests or requires production access.
 | `init` | Configure provider and the pre-push hook only. Never starts a coding CLI or runs tests. `--no-hook` skips hook installation; `--force` allows insertion into a managed hook after backup (does not overwrite config). |
 | `playwright-init` | Show setup guidance. `--yes` opens the main coding CLI to set up Playwright; PushPilot does not run tests afterwards. |
 | `generate` | Generate coverage without initiating a push. `--base REV`, `--head REV` (default HEAD), `--provider copilot\|claude`, `--force` retry duplicate changes. `--foreground` is retained for compatibility; all generation is foreground. |
+| `verify --job ID` | Run only the job's new/edited specs. Used by the coding CLI's fix loop; a passing run ends its session. |
 | `push` | Alias for normal `git push`; all arguments pass to Git and the installed hook handles coverage. |
 | `status [JOB]` | Recent jobs or one job; `--json`, `--limit N` (default 10). |
 | `logs [JOB]` | Latest or selected job log; `--tail N` (default 200). |
@@ -130,7 +134,7 @@ pushpilot config set provider claude
 pushpilot config set playwright.testDir tests/e2e
 pushpilot config set playwright.testCommand '[".venv/bin/python","-m","pytest"]'
 pushpilot config set generation.commitGeneratedTests false
-pushpilot config set generation.timeoutSeconds 1800
+pushpilot config set generation.timeoutSeconds 7200   # optional hard cap; default is none
 ```
 
 On Windows use `.venv/Scripts/python.exe` in the JSON array. Configure argv, not a shell

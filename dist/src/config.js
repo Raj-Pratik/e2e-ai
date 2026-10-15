@@ -23,14 +23,14 @@ export function defaultConfig() {
         },
         prompt: { timeoutSeconds: 60 },
         generation: {
-            timeoutSeconds: 900,
+            timeoutSeconds: null,
             maxOutputBytes: 1024 * 1024,
             allowModifyExistingTests: true,
             outputDir: null,
             interactive: true,
             commitGeneratedTests: true,
         },
-        playwright: { configPath: null, testDir: null, runGeneratedTests: true, testCommand: null, testTimeoutSeconds: 600 },
+        playwright: { configPath: null, testDir: null, runGeneratedTests: true, testCommand: null, testTimeoutSeconds: null },
         mcp: { playwright: { enabled: false, command: 'npx', args: ['@playwright/mcp@latest'], baseUrl: null } },
         context: {
             maxFiles: 60,
@@ -117,7 +117,7 @@ const schema = obj({
     providers: record(providerSchema),
     prompt: obj({ timeoutSeconds: int(1, 3600) }),
     generation: obj({
-        timeoutSeconds: int(10, 6 * 3600),
+        timeoutSeconds: nullable(int(10, 7 * 24 * 3600)),
         maxOutputBytes: int(1024, 64 * 1024 * 1024),
         allowModifyExistingTests: bool,
         outputDir: nullable(str),
@@ -129,7 +129,7 @@ const schema = obj({
         testDir: nullable(str),
         runGeneratedTests: bool,
         testCommand: nullable(nonEmptyStrArray),
-        testTimeoutSeconds: int(10, 6 * 3600),
+        testTimeoutSeconds: nullable(int(10, 7 * 24 * 3600)),
     }),
     mcp: obj({
         playwright: obj({ enabled: bool, command: str, args: strArray, baseUrl: nullable(httpUrl) }),

@@ -43,7 +43,7 @@ export const copilotProvider = {
             ? ['-i', request.instruction, '--allow-all-tools']
             : ['-p', request.instruction, '--silent', '--no-ask-user', '--allow-all-tools'];
         const allowedShell = new Set(settings.allowedShellCommands.map((c) => c.trim()));
-        if (allowedShell.size === 0) {
+        if (allowedShell.size === 0 && !request.verifyCommand) {
             args.push('--deny-tool=shell');
         }
         else {

@@ -4,7 +4,7 @@ import { rankRelated } from './playwright.js';
 import { redactSecrets } from './redact.js';
 const MAX_SUPPORT_LISTED = 150;
 const MAX_INCLUDED_FILE_BYTES = 30_000;
-/** Completion signal written by the agent; ai-e2e closes the coding CLI session when it appears. */
+/** Signal written by the agent for not-needed/blocked outcomes; a passing `verify` run is the success signal. */
 export const DONE_FILE = 'done.json';
 function readSafe(root, rel) {
     try {
@@ -54,7 +54,7 @@ export function buildTask(input) {
     const out = setup.outputDir;
     const changedPaths = changeSet.files.map((f) => f.path);
     const jobRel = path.relative(repoRoot, input.jobDir).split(path.sep).join('/');
-    budget.add(`# Task: plan, generate and run Playwright E2E tests for outgoing changes
+    budget.add(`# Task: plan, generate and verify Playwright E2E tests for outgoing changes
 
 You are generating end-to-end tests for code that a developer is pushing. Work only inside this repository.
 
@@ -73,15 +73,20 @@ Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwri
 3. **Approval gate (never skip).** Ask the user to approve or revise the plan. Do not write any spec or helper until
    the user explicitly approves. If they ask for changes, update \`plan.md\` and ask again.
 4. **Generate.** Write the approved tests yourself, following the plan exactly.
-5. **Run and fix loop.** Run the added or patched specs and relevant existing coverage with the repository's Playwright command (for example
-   \`npx playwright test <spec paths>\` or the matching package script). The Playwright config starts the web
+5. **Verify loop (only the new/edited specs).** Run exactly this command, and nothing broader:
+   \`${input.verifyCommand}\`
+   It finds the spec files you added or edited (plus any existing spec that imports a helper you added or edited),
+   runs only those with the repository's Playwright command, and prints the full Playwright output.
+   A run can take several minutes: give the shell call the longest timeout your tool allows (or run it in the
+   background and wait for it to exit). A run that is cut off records nothing; just run it again.
+   Do NOT run the whole suite or unrelated specs; that wastes a lot of time. The Playwright config starts the web
    server if configured; otherwise ask permission to start the required local server and clean it up afterwards.
-   For Python use the configured environment's python -m pytest command with pytest-playwright.
-   Read failure output, error context, traces and reports; fix the approved tests/helpers; rerun.
-   Repeat until all relevant tests pass, cancellation, the job deadline, or a genuine actionable blocker.
-   Ask for missing inputs; never invent credentials or hide failures.
-6. **Finish.** When the relevant specs pass, write the completion file. PushPilot then closes this session, re-runs the
-   specs, commits them and pushes.
+   If verify reports FAILED: read the failure output, error context, traces and reports; fix the generated
+   tests/helpers; run the same verify command again. Repeat this loop for as long as it takes — there is no time
+   limit — until verify reports PASSED, the user cancels, or a genuine actionable blocker remains.
+   Ask for missing inputs; never invent credentials, never skip, \`.only\` or weaken tests to make them pass.
+6. **Finish.** A PASSED verify run is the completion signal. PushPilot closes this session automatically, then
+   commits the verified test files and pushes them. Do not edit test files after the passing run.
 
 ## Rules
 - Add or patch Playwright tests and source helpers only under \`${out}/\`.
@@ -89,7 +94,8 @@ Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwri
   Use the \`${setup.testSuffix}\` naming convention.
 - Do NOT modify application source, configuration, package manifests, lockfiles or CI files; do not rename or delete files.
   The only non-test files you may create are \`plan.md\` and the completion file in the job directory.
-- Do NOT run git commands that change state (commit, push, add, reset, checkout, stash). Do NOT install packages.
+- Do NOT run git commands that change state (commit, push, add, reset, checkout, stash); PushPilot commits and pushes
+  for you. Do NOT install packages.
 - Do NOT read or reference secrets, credentials, \`.env\` files, auth storage-state files or private keys.
 - Do NOT contact production systems or perform destructive actions. Ask permission for local server startup if needed.
 - Test user-visible behaviour introduced or changed by the diff below. Prefer accessible locators
@@ -101,15 +107,12 @@ Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwri
   existing common helpers or a new shared helper under the E2E test directory.
 
 ## Completion signal (mandatory)
-Never stop after writing tests. Keep the loop going — run the new specs, read the Playwright report, fix the generated
-tests/helpers, rerun — until every new spec passes locally. Ask the user in this terminal only when you genuinely need
-their input (for example authentication or environment details), then continue the loop.
-When the new specs pass, write \`${jobRel}/${DONE_FILE}\` with
-\`{"status":"passed","specs":["<spec paths>"],"command":"<command you ran>"}\`. PushPilot then closes this session
-automatically, re-verifies the specs, commits them and pushes. Do not ask the user to exit or type /exit.
-If the change clearly needs no E2E test (non-product change), write \`{"status":"not-needed","reason":"<why>"}\`.
-If a blocker cannot be resolved even with the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\`.
-Never write \`"passed"\` before the tests actually pass.
+Never stop after writing tests. Keep the verify loop going until it reports PASSED. Ask the user in this terminal only
+when you genuinely need their input (for example authentication or environment details), then continue the loop.
+Do not write \`"passed"\` yourself and do not ask the user to exit or type /exit: the passing verify run ends the session.
+If the change clearly needs no E2E test (non-product change), write \`${jobRel}/${DONE_FILE}\` with
+\`{"status":"not-needed","reason":"<why>"}\`.
+If a blocker cannot be resolved even with the user's help, write \`{"status":"blocked","reason":"<concrete reason>"}\` there.
 
 ## Final answer
 Reply briefly with: the files you created, what each test covers, the exact Playwright command you ran and its
