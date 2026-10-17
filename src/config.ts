@@ -9,6 +9,8 @@ export type DuplicatePolicy = 'skip' | 'allow';
 export interface ProviderSettings {
   command: string | null;
   model: string | null;
+  /** Model used instead of `model` when the outgoing change is large (see generation.complexChange). */
+  complexModel: string | null;
   fallbackModels: string[];
   extraArgs: string[];
   allowUnsafeArgs: boolean;
@@ -40,6 +42,8 @@ export interface Config {
     outputDir: string | null;
     interactive: boolean;
     commitGeneratedTests: boolean;
+    /** A change touching at least minFiles files or minDiffBytes of diff uses the provider's complexModel. */
+    complexChange: { minFiles: number; minDiffBytes: number };
   };
   playwright: {
     configPath: string | null;
@@ -61,10 +65,11 @@ export interface Config {
   jobs: { duplicate: DuplicatePolicy; stateDir: string; keep: number };
 }
 
-export function defaultProviderSettings(): ProviderSettings {
+export function defaultProviderSettings(model: string | null = null, complexModel: string | null = null): ProviderSettings {
   return {
     command: null,
-    model: null,
+    model,
+    complexModel,
     fallbackModels: [],
     extraArgs: [],
     allowUnsafeArgs: false,
@@ -78,8 +83,9 @@ export function defaultConfig(): Config {
     enabled: true,
     provider: 'copilot',
     providers: {
-      copilot: defaultProviderSettings(),
-      claude: defaultProviderSettings(),
+      // Same models on both: Haiku by default, Sonnet for large changes.
+      copilot: defaultProviderSettings('claude-haiku-5.5', 'claude-sonnet-5.5'),
+      claude: defaultProviderSettings('claude-haiku-5-5', 'claude-sonnet-5-5'),
     },
     prompt: { timeoutSeconds: 60 },
     generation: {
@@ -89,6 +95,7 @@ export function defaultConfig(): Config {
       outputDir: null,
       interactive: true,
       commitGeneratedTests: true,
+      complexChange: { minFiles: 6, minDiffBytes: 25_000 },
     },
     playwright: { configPath: null, testDir: null, runGeneratedTests: true, testCommand: null, testTimeoutSeconds: null },
     mcp: { playwright: { enabled: false, command: 'npx', args: ['@playwright/mcp@latest'], baseUrl: null } },
@@ -176,6 +183,7 @@ const record =
 const providerSchema = obj({
   command: nullable(str),
   model: nullable(str),
+  complexModel: nullable(str),
   fallbackModels: strArray,
   extraArgs: strArray,
   allowUnsafeArgs: bool,
@@ -196,6 +204,7 @@ const schema = obj({
     outputDir: nullable(str),
     interactive: bool,
     commitGeneratedTests: bool,
+    complexChange: obj({ minFiles: int(1, 100_000), minDiffBytes: int(1, 1024 * 1024 * 1024) }),
   }),
   playwright: obj({
     configPath: nullable(str),
@@ -234,7 +243,8 @@ export function validateConfig(raw: unknown): Config {
   delete partial.$schema;
   const merged = deepMerge(defaultConfig(), partial);
   for (const [id, settings] of Object.entries(merged.providers)) {
-    merged.providers[id] = deepMerge(defaultProviderSettings(), settings);
+    const defaults = defaultConfig().providers[id] ?? defaultProviderSettings();
+    merged.providers[id] = deepMerge(defaults, settings);
   }
   return merged;
 }

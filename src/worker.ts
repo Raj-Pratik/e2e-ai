@@ -256,6 +256,10 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
     const availability = await detectProvider(provider, settings, root);
     if (!availability.available) throw new AiE2eError(`${provider.displayName} is unavailable: ${availability.reason}`);
     log(`Provider ${provider.displayName}: ${availability.resolvedPath} (${availability.version ?? 'unknown version'}).`);
+    const { minFiles, minDiffBytes } = config.generation.complexChange;
+    const complex = changeSet.files.length >= minFiles || changeSet.totalDiffBytes >= minDiffBytes;
+    const model = complex && settings.complexModel ? settings.complexModel : settings.model;
+    if (model) log(`Model ${model} (${complex ? 'large change' : 'default'}).`);
 
     log('The coding CLI plans, writes and runs the tests itself (no Playwright sub-agents or MCP).');
 
@@ -329,7 +333,7 @@ export async function runJob(options: WorkerOptions): Promise<JobRecord> {
       return null;
     };
     const runWithFallbacks = async (prompt: string) => {
-      let attempt = await runProvider(settings.model, prompt);
+      let attempt = await runProvider(model, prompt);
       for (const fallbackModel of settings.fallbackModels) {
         if (attempt.completed || attempt.exitCode === 0 || attempt.error || attempt.aborted || attempt.timedOut) break;
         log(`Provider exited unsuccessfully; retrying with fallback model ${fallbackModel}.`);

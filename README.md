@@ -104,6 +104,17 @@ pushpilot config set generation.commitGeneratedTests false  # don't auto-commit 
 pushpilot config set generation.timeoutSeconds 3600         # stop after 1 hour (default: no limit)
 ```
 
+**Models.** Copilot and Claude use the same models: **Claude Haiku 5.5** by default, and
+**Claude Sonnet 5.5** when a push is large (6+ files or 25 KB+ of changes). To change them:
+
+```sh
+pushpilot config set providers.claude.model claude-sonnet-5-5
+pushpilot config set providers.copilot.complexModel claude-opus-5.5
+pushpilot config set generation.complexChange.minFiles 10
+```
+
+Claude Code writes model names with dashes (`claude-haiku-5-5`), Copilot with a dot (`claude-haiku-5.5`).
+
 **Python projects** (pytest-playwright): point PushPilot at your virtualenv.
 
 ```sh

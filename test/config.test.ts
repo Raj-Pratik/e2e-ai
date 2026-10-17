@@ -26,6 +26,15 @@ describe('config', () => {
     assert.ok(config.providers.copilot);
   });
 
+  it('defaults both providers to Haiku 5.5, with Sonnet 5.5 for large changes', () => {
+    const config = validateConfig({ providers: { claude: { maxTurns: 10 } } });
+    assert.equal(config.providers.claude?.model, 'claude-haiku-5-5');
+    assert.equal(config.providers.claude?.complexModel, 'claude-sonnet-5-5');
+    assert.equal(config.providers.copilot?.model, 'claude-haiku-5.5');
+    assert.equal(config.providers.copilot?.complexModel, 'claude-sonnet-5.5');
+    assert.deepEqual(config.generation.complexChange, { minFiles: 6, minDiffBytes: 25_000 });
+  });
+
   it('rejects unknown keys, wrong types and bad values with the offending path', () => {
     assert.throws(() => validateConfig({ provder: 'x' }), /unknown key "config.provder"/);
     assert.throws(() => validateConfig({ enabled: 'yes' }), /"config.enabled" must be a boolean/);

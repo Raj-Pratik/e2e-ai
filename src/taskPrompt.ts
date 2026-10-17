@@ -87,11 +87,14 @@ Do NOT delegate to sub-agents. Do NOT use \`playwright-test-planner\`, \`playwri
    If no browser coverage is needed, write the completion file with \`"not-needed"\` and a concrete reason.
 2. **Plan.** Read the changed source, related components and existing E2E tests/helpers. Write the test plan to
    \`${jobRel}/plan.md\` as a readable spec: files to create OR patch, each scenario with its user steps and assertions,
-   fixtures/auth/data used, and the command you will run. Show the same plan in this terminal.
+   fixtures/auth/data used, and the command you will run. Keep exploration short: read only what the plan needs.
    Ask questions only when the answer changes the plan (critical path, expected assertion, test data/role,
    environment). Use short multiple-choice questions with an "Other" option. Never ask "why" questions.
-3. **Approval gate (never skip).** Ask the user to approve or revise the plan. Do not write any spec or helper until
-   the user explicitly approves. If they ask for changes, update \`plan.md\` and ask again.
+3. **Approval gate (never skip).** First print the complete plan as your own message in this terminal, written out
+   in full (scenarios, steps, assertions, files). Do not just say it was saved to \`plan.md\`, and do not ask for
+   approval in the same message as a tool call: the user must be able to read the whole plan before answering.
+   Then ask the user to approve or revise it. Do not write any spec or helper until the user explicitly approves.
+   If they ask for changes, update \`plan.md\`, print the revised plan in full, and ask again.
 4. **Generate.** Write the approved tests yourself, following the plan exactly.
 5. **Verify loop (only the new/edited specs).** Run exactly this command, and nothing broader:
    \`${input.verifyCommand}\`

@@ -1,8 +1,8 @@
 {
   "provider": "copilot",
   "providers": {
-    "copilot": { "model": null, "extraArgs": [] },
-    "claude": { "model": "sonnet", "maxTurns": 40 }
+    "copilot": { "model": "claude-haiku-5.5", "complexModel": "claude-sonnet-5.5", "extraArgs": [] },
+    "claude": { "model": "claude-haiku-5-5", "complexModel": "claude-sonnet-5-5", "maxTurns": 40 }
   },
   "prompt": { "timeoutSeconds": 60 },
   "generation": { "timeoutSeconds": 900, "outputDir": null, "allowModifyExistingTests": false },
