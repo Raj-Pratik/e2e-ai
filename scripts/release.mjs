@@ -22,11 +22,11 @@ if (process.argv[2] === 'manifests') {
     VERSION: version,
     BASE_URL: process.env.RELEASE_BASE_URL ?? `https://github.com/Raj-Pratik/e2e-ai/releases/download/v${version}`,
   };
-  for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']) {
-    const archive = `pushpilot-${version}-${target}.${target.startsWith('win32') ? 'zip' : 'tar.gz'}`;
+  const archives = { WIN32_X64_SHA256: `pushpilot-${version}-win32-x64.zip`, SHA256: `pushpilot-${version}.tar.gz` };
+  for (const [key, archive] of Object.entries(archives)) {
     const [hash] = fs.readFileSync(path.join(dir, `${archive}.sha256`), 'utf8').split(/\s+/);
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Invalid checksum for ${archive}.`);
-    values[`${target.replace('-', '_').toUpperCase()}_SHA256`] = hash;
+    values[key] = hash;
   }
   for (const [template, output] of [['packaging/pushpilot.rb.in', 'Formula/pushpilot.rb'], ['packaging/pushpilot.scoop.json.in', 'bucket/pushpilot.json']]) {
     const text = fs.readFileSync(template, 'utf8').replace(/@([A-Z0-9_]+)@/g, (_, key) => {
@@ -40,20 +40,27 @@ if (process.argv[2] === 'manifests') {
   process.exit(0);
 }
 if (process.argv[2] !== 'bundle') throw new Error('Usage: node scripts/release.mjs check|manifests [archives-dir] [out-dir]|bundle');
-if (!process.env.NODE_LICENSE) throw new Error('Set NODE_LICENSE to the official license for the bundled Node version.');
-const platform = process.platform;
+// PUSHPILOT_NO_RUNTIME=1 builds one platform-independent archive without Node, for package
+// managers that supply Node themselves (the Homebrew formula depends on Homebrew's node).
+const noRuntime = process.env.PUSHPILOT_NO_RUNTIME === '1';
+if (!noRuntime && !process.env.NODE_LICENSE) throw new Error('Set NODE_LICENSE to the official license for the bundled Node version.');
+const platform = noRuntime ? 'any' : process.platform;
 const arch = process.arch;
-const name = `pushpilot-${version}-${platform}-${arch}`;
+const name = noRuntime ? `pushpilot-${version}` : `pushpilot-${version}-${platform}-${arch}`;
 const root = path.join('release', name);
 fs.rmSync(root, { recursive: true, force: true });
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 fs.cpSync('dist/src', path.join(root, 'dist/src'), { recursive: true });
 fs.copyFileSync('package.json', path.join(root, 'package.json'));
 fs.copyFileSync('README.md', path.join(root, 'README.md'));
-fs.copyFileSync(process.env.NODE_LICENSE, path.join(root, 'NODE-LICENSE'));
-fs.copyFileSync(process.execPath, path.join(root, platform === 'win32' ? 'node.exe' : 'node'));
-fs.writeFileSync(path.join(root, 'pushpilot'), '#!/bin/sh\nroot="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$root/node" "$root/dist/src/cli.js" "$@"\n', { mode: 0o755 });
-fs.writeFileSync(path.join(root, 'pushpilot.cmd'), '@echo off\r\n"%~dp0node.exe" "%~dp0dist\\src\\cli.js" %*\r\n');
+if (noRuntime) {
+  fs.writeFileSync(path.join(root, 'pushpilot'), '#!/bin/sh\nroot="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec node "$root/dist/src/cli.js" "$@"\n', { mode: 0o755 });
+} else {
+  fs.copyFileSync(process.env.NODE_LICENSE, path.join(root, 'NODE-LICENSE'));
+  fs.copyFileSync(process.execPath, path.join(root, platform === 'win32' ? 'node.exe' : 'node'));
+  fs.writeFileSync(path.join(root, 'pushpilot'), '#!/bin/sh\nroot="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$root/node" "$root/dist/src/cli.js" "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'pushpilot.cmd'), '@echo off\r\n"%~dp0node.exe" "%~dp0dist\\src\\cli.js" %*\r\n');
+}
 const files = [];
 function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) {

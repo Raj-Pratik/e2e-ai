@@ -26,7 +26,7 @@ scoop bucket add pushpilot https://github.com/Raj-Pratik/e2e-ai
 scoop install pushpilot
 ```
 
-You don't need to install Node. It comes bundled.
+You don't need to install Node yourself. Homebrew installs it for you, and on Windows it comes bundled.
 
 To update, run `brew upgrade pushpilot` or `scoop update pushpilot`.
 

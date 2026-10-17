@@ -13,7 +13,8 @@ workflow then:
 - creates the tag `v<version>` and a GitHub Release with notes taken from the commits
   since the previous tag
 - renders `packaging/pushpilot.rb.in` into `Formula/pushpilot.rb` (this repo works as a
-  Homebrew tap)
+  Homebrew tap). The formula downloads `pushpilot-<version>.tar.gz`, a small archive without
+  Node (built with `PUSHPILOT_NO_RUNTIME=1`), and depends on Homebrew's `node`
 - renders `packaging/pushpilot.scoop.json.in` into `bucket/pushpilot.json` (this repo works
   as a Scoop bucket)
 

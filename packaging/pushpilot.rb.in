@@ -2,34 +2,22 @@
 class Pushpilot < Formula
   desc "Approved Playwright coverage for outgoing Git changes"
   homepage "https://github.com/Raj-Pratik/e2e-ai"
+  url "@BASE_URL@/pushpilot-@VERSION@.tar.gz"
+  sha256 "@SHA256@"
   version "@VERSION@"
   license "MIT"
 
-  on_macos do
-    if Hardware::CPU.arm?
-      url "@BASE_URL@/pushpilot-@VERSION@-darwin-arm64.tar.gz"
-      sha256 "@DARWIN_ARM64_SHA256@"
-    else
-      url "@BASE_URL@/pushpilot-@VERSION@-darwin-x64.tar.gz"
-      sha256 "@DARWIN_X64_SHA256@"
-    end
-  end
-  on_linux do
-    if Hardware::CPU.arm?
-      url "@BASE_URL@/pushpilot-@VERSION@-linux-arm64.tar.gz"
-      sha256 "@LINUX_ARM64_SHA256@"
-    else
-      url "@BASE_URL@/pushpilot-@VERSION@-linux-x64.tar.gz"
-      sha256 "@LINUX_X64_SHA256@"
-    end
-  end
+  depends_on "node"
+
   def install
     libexec.install Dir["*"]
+    # opt_bin keeps working when Homebrew upgrades node in place.
     (bin/"pushpilot").write <<~EOS
       #!/bin/sh
-      exec "#{libexec}/pushpilot" "$@"
+      exec "#{Formula["node"].opt_bin}/node" "#{libexec}/dist/src/cli.js" "$@"
     EOS
   end
+
   test do
     assert_equal version.to_s, shell_output("#{bin}/pushpilot --version").strip
   end
