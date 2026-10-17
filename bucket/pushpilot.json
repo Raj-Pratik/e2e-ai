@@ -1,14 +1,14 @@
 {
   "##": "Generated from packaging/pushpilot.scoop.json.in by the release workflow. Do not edit by hand.",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Approved Playwright coverage for outgoing Git changes",
   "homepage": "https://github.com/Raj-Pratik/e2e-ai",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.7.0/pushpilot-1.7.0-win32-x64.zip",
-      "hash": "a2a4b0f0eab4a75342ccf659488fefe28b27afd41756ea514d344b225e51441f",
-      "extract_dir": "pushpilot-1.7.0-win32-x64"
+      "url": "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.8.0/pushpilot-1.8.0-win32-x64.zip",
+      "hash": "3ae82eb8020e3bad07c0f57774bfae014868b93574977526f55d8534104fd2ee",
+      "extract_dir": "pushpilot-1.8.0-win32-x64"
     }
   },
   "bin": "pushpilot.cmd"
