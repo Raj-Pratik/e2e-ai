@@ -144,13 +144,20 @@ jobs:
             echo '# macOS / Linux'
             echo 'brew tap raj-pratik/pushpilot https://github.com/Raj-Pratik/e2e-ai'
             echo 'brew trust raj-pratik/pushpilot'
-            echo 'brew install pushpilot     # update: brew upgrade pushpilot'
+            echo 'brew install pushpilot'
+            echo '```'
+            echo
+            echo 'Already installed? Update with:'
+            echo
+            echo '```sh'
+            echo 'brew update && brew upgrade pushpilot'
             echo '```'
             echo
             echo '```powershell'
             echo '# Windows'
             echo 'scoop bucket add pushpilot https://github.com/Raj-Pratik/e2e-ai'
-            echo 'scoop install pushpilot    # update: scoop update pushpilot'
+            echo 'scoop install pushpilot'
+            echo '# update: scoop update; scoop update pushpilot'
             echo '```'
             echo
             echo 'Installed the old npm version? Run `npm uninstall -g pushpilot` first so it does not shadow this one.'

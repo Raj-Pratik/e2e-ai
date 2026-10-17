@@ -28,8 +28,6 @@ scoop install pushpilot
 
 You don't need to install Node yourself. Homebrew installs it for you, and on Windows it comes bundled.
 
-To update, run `brew upgrade pushpilot` or `scoop update pushpilot`.
-
 **Installed the old npm version before?** Remove it first, or it will keep running instead
 of the new one:
 
@@ -44,6 +42,23 @@ into a Node folder.
 **You also need:**
 - Git (on Windows, use Git for Windows)
 - [GitHub Copilot CLI](https://github.com/features/copilot/cli) or [Claude Code](https://claude.com/claude-code), installed and signed in
+
+## Update
+
+**macOS / Linux**
+
+```sh
+brew update && brew upgrade pushpilot
+```
+
+`brew upgrade` alone may say you're up to date. Homebrew only checks for new versions
+when it updates, and `brew update` makes it do that now.
+
+**Windows**
+
+```powershell
+scoop update; scoop update pushpilot
+```
 
 ## Quick start
 
