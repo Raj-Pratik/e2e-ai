@@ -2,25 +2,25 @@
 class Pushpilot < Formula
   desc "Approved Playwright coverage for outgoing Git changes"
   homepage "https://github.com/Raj-Pratik/e2e-ai"
-  version "1.3.0"
+  version "1.4.0"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.3.0/pushpilot-1.3.0-darwin-arm64.tar.gz"
-      sha256 "fe1004f0772e52de9a230416538a5a76c9a864914cc8f3016afcffd9b55af8d9"
+      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.4.0/pushpilot-1.4.0-darwin-arm64.tar.gz"
+      sha256 "919a2c353a9c5aeaedaa15298afe9103cc9def32158d3c232b0a9668ae72ea76"
     else
-      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.3.0/pushpilot-1.3.0-darwin-x64.tar.gz"
-      sha256 "bc967f2e37569cb6e6c288a95167d5f2830b842cdcb2fe179f8aded62bffff2b"
+      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.4.0/pushpilot-1.4.0-darwin-x64.tar.gz"
+      sha256 "31a714baf92bd37895b6234df23871c33fe818a5a21a79b717069ac47fe8addf"
     end
   end
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.3.0/pushpilot-1.3.0-linux-arm64.tar.gz"
-      sha256 "9fd0ee65ff9a10126ec1190e62fb25ec6f54c105644f73bee32015e3a621db35"
+      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.4.0/pushpilot-1.4.0-linux-arm64.tar.gz"
+      sha256 "0ed76c27766d6b67760ce57fa335870c06a82d0aa32487e3d58168726ae728ad"
     else
-      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.3.0/pushpilot-1.3.0-linux-x64.tar.gz"
-      sha256 "363a29b44a44911006d0cb23dd74780440e84dacb4e44005d9256f2be99bab4a"
+      url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.4.0/pushpilot-1.4.0-linux-x64.tar.gz"
+      sha256 "3c4ea99807e879e791645faa4f2b66f05980a9c3508520fa7dd0f8a9abf2f3a6"
     end
   end
   def install
