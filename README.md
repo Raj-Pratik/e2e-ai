@@ -13,8 +13,11 @@ PushPilot then commits the tests and pushes them for you.
 
 ```sh
 brew tap raj-pratik/pushpilot https://github.com/Raj-Pratik/e2e-ai
+brew trust raj-pratik/pushpilot
 brew install pushpilot
 ```
+
+`brew trust` is a one-time step. Homebrew asks for it for any tap that isn't one of its official ones.
 
 **Windows** (Scoop)
 
@@ -26,6 +29,17 @@ scoop install pushpilot
 You don't need to install Node. It comes bundled.
 
 To update, run `brew upgrade pushpilot` or `scoop update pushpilot`.
+
+**Installed the old npm version before?** Remove it first, or it will keep running instead
+of the new one:
+
+```sh
+npm uninstall -g pushpilot
+```
+
+If you use asdf or nvm, run that with the same Node version you installed it under, then
+run `asdf reshim nodejs` (asdf only). Check with `which pushpilot`: it should not point
+into a Node folder.
 
 **You also need:**
 - Git (on Windows, use Git for Windows)
