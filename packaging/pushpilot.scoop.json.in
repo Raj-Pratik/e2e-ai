@@ -1,4 +1,5 @@
 {
+  "##": "Generated from packaging/pushpilot.scoop.json.in by the release workflow. Do not edit by hand.",
   "version": "@VERSION@",
   "description": "Approved Playwright coverage for outgoing Git changes",
   "homepage": "https://github.com/Raj-Pratik/e2e-ai",

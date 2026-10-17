@@ -13,7 +13,33 @@ if (process.argv[2] === 'check') {
   console.log(`PushPilot ${version}: release metadata valid.`);
   process.exit(0);
 }
-if (process.argv[2] !== 'bundle') throw new Error('Usage: node scripts/release.mjs check|bundle');
+if (process.argv[2] === 'manifests') {
+  // Renders the Homebrew formula and Scoop manifest from packaging/*.in using the real
+  // .sha256 sidecars of the published archives in the given directory.
+  const dir = process.argv[3] ?? 'release';
+  const out = process.argv[4] ?? path.join('release', 'manifests');
+  const values = {
+    VERSION: version,
+    BASE_URL: process.env.RELEASE_BASE_URL ?? `https://github.com/Raj-Pratik/e2e-ai/releases/download/v${version}`,
+  };
+  for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']) {
+    const archive = `pushpilot-${version}-${target}.${target.startsWith('win32') ? 'zip' : 'tar.gz'}`;
+    const [hash] = fs.readFileSync(path.join(dir, `${archive}.sha256`), 'utf8').split(/\s+/);
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Invalid checksum for ${archive}.`);
+    values[`${target.replace('-', '_').toUpperCase()}_SHA256`] = hash;
+  }
+  for (const [template, output] of [['packaging/pushpilot.rb.in', 'Formula/pushpilot.rb'], ['packaging/pushpilot.scoop.json.in', 'bucket/pushpilot.json']]) {
+    const text = fs.readFileSync(template, 'utf8').replace(/@([A-Z0-9_]+)@/g, (_, key) => {
+      if (!(key in values)) throw new Error(`No value for @${key}@ in ${template}.`);
+      return values[key];
+    });
+    fs.mkdirSync(path.join(out, path.dirname(output)), { recursive: true });
+    fs.writeFileSync(path.join(out, output), text);
+    console.log(`Wrote ${path.join(out, output)}`);
+  }
+  process.exit(0);
+}
+if (process.argv[2] !== 'bundle') throw new Error('Usage: node scripts/release.mjs check|manifests [archives-dir] [out-dir]|bundle');
 if (!process.env.NODE_LICENSE) throw new Error('Set NODE_LICENSE to the official license for the bundled Node version.');
 const platform = process.platform;
 const arch = process.arch;

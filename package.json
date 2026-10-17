@@ -1,6 +1,6 @@
 {
   "name": "pushpilot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "AI-assisted Playwright E2E test generation for outgoing Git changes.",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test --test-concurrency=4 dist/test/*.test.js",
     "release:check": "node scripts/release.mjs check",
-    "release:bundle": "node scripts/release.mjs bundle"
+    "release:bundle": "node scripts/release.mjs bundle",
+    "release:manifests": "node scripts/release.mjs manifests"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -1,3 +1,4 @@
+# Generated from packaging/pushpilot.rb.in by the release workflow. Do not edit by hand.
 class Pushpilot < Formula
   desc "Approved Playwright coverage for outgoing Git changes"
   homepage "https://github.com/Raj-Pratik/e2e-ai"

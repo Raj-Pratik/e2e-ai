@@ -1,167 +1,97 @@
 # PushPilot
 
-PushPilot adds an optional, approved Playwright workflow to **normal `git push`**.
-It uses your main GitHub Copilot CLI (default) or Claude Code session to inspect outgoing
-commits, read existing coverage, propose a plan, and add **or patch** browser tests.
-The coding CLI runs and repairs only the new/edited tests until they pass; PushPilot then
-commits and pushes exactly the verified files and notifies you.
+**Get Playwright tests for your changes every time you `git push`.**
+
+When you push, PushPilot asks: *"Generate tests for these changes?"*
+If you say yes, your AI coding assistant (GitHub Copilot CLI or Claude Code) reads what
+changed, shows you a test plan, writes the tests, and fixes them until they pass.
+PushPilot then commits the tests and pushes them for you.
 
 ## Install
 
-**Version 1.0.0 is prepared in this repository, not published.** There is no published
-Homebrew tap, Scoop bucket, or WinGet package to install yet. Do not use invented hashes
-or assume the commands below are available until the maintainer publishes them.
-
-For local use now (requires Git and Node 20.10+):
+**macOS / Linux** (Homebrew)
 
 ```sh
-git clone https://github.com/Raj-Pratik/e2e-ai.git
-cd e2e-ai
-npm ci
-npm run build
-node "$PWD/dist/src/cli.js" --help
-# In your application repository, use the absolute path:
-node /absolute/path/to/e2e-ai/dist/src/cli.js init
+brew tap raj-pratik/pushpilot https://github.com/Raj-Pratik/e2e-ai
+brew install pushpilot
 ```
 
-After release publication, download the matching macOS/Linux `.tar.gz` or Windows
-`.zip` and its `.sha256` file from the repository's Releases page. Verify the SHA-256
-before extracting. Archives include Node; no separate Node installation or global npm
-installation is needed. Keep the whole extracted folder together.
-
-```sh
-# macOS (Linux: sha256sum -c instead)
-shasum -a 256 -c pushpilot-1.0.0-darwin-arm64.tar.gz.sha256
-tar -xzf pushpilot-1.0.0-darwin-arm64.tar.gz
-./pushpilot-1.0.0-darwin-arm64/pushpilot --help
-```
-
-Windows PowerShell (x64; experimental console support):
+**Windows** (Scoop)
 
 ```powershell
-Get-FileHash .\pushpilot-1.0.0-win32-x64.zip -Algorithm SHA256
-# Compare against the downloaded .sha256 file before extracting.
-Expand-Archive .\pushpilot-1.0.0-win32-x64.zip -DestinationPath .\PushPilot
-.\PushPilot\pushpilot-1.0.0-win32-x64\pushpilot.cmd --help
+scoop bucket add pushpilot https://github.com/Raj-Pratik/e2e-ai
+scoop install pushpilot
 ```
 
-Add that extracted directory to PATH to use `pushpilot` anywhere. Homebrew installation
-will use the following form **only after a tap is published**:
+You don't need to install Node. It comes bundled.
+
+To update, run `brew upgrade pushpilot` or `scoop update pushpilot`.
+
+**You also need:**
+- Git (on Windows, use Git for Windows)
+- [GitHub Copilot CLI](https://github.com/features/copilot/cli) or [Claude Code](https://claude.com/claude-code), installed and signed in
+
+## Quick start
+
+In your app's repo:
 
 ```sh
-brew tap <published-owner>/<published-tap>
-brew install <published-owner>/<published-tap>/pushpilot
+pushpilot init                   # pick your AI assistant and add the git push hook
+pushpilot playwright-init --yes  # one-time: let the AI set up Playwright in your repo
+git push                         # answer "y" when asked to generate tests
 ```
 
-Install and sign in to your selected coding CLI separately. Its subscription, permissions,
-and model availability apply; PushPilot uses its default model unless you configure one.
-Git for Windows is required for the shell pre-push hook. Windows console interaction is
-implemented using `CONIN$`/`CONOUT$`, but has not been manually verified in this release.
-Use native `.exe` coding CLIs; `.cmd`/`.bat` provider shims are not supported. Windows
-release CI builds and checks CLI startup, not interactive provider sessions.
+## What happens when you push
 
-## First use
+1. **You choose.** PushPilot asks whether to generate tests. Press Enter (or wait) to skip, and the push goes through as usual.
+2. **You approve a plan.** The AI looks at your changes and the tests you already have, then proposes which tests to add or update. Nothing changes until you approve.
+3. **It writes and fixes tests.** The AI runs only the tests it touched and keeps fixing them until they pass. Skipped or flaky tests don't count as passing.
+4. **It commits and pushes.** Your original push finishes, then PushPilot commits the passing tests and pushes them. You get a desktop notification when it's done.
 
-In the application repository:
+If the AI decides your change doesn't need tests, it says why and changes nothing.
+Press Ctrl-C at any point to cancel.
 
-```sh
-pushpilot init
-```
+## Commands
 
-Choose Copilot (Enter defaults to Copilot) or Claude Code. Init preserves existing
-configuration, installs the **pre-push** hook without replacing unrelated hook commands,
-and opens the selected main coding CLI to inspect your language/framework and set up
-Playwright. It installs the appropriate development dependencies/browsers with your
-permission, configures a local server/fixtures, and runs an actual smoke test.
-PushPilot reruns discovered tests: listing tests alone is not successful setup.
-Review and commit setup changes yourself before generating outgoing coverage.
-
-JavaScript/TypeScript uses Playwright Test. Python uses `pytest-playwright` and your
-virtual environment, configured by the setup session. Mixed or unusual layouts need an
-explicit test directory and command. Other language runners are not supported.
-`init` installs configuration and the pre-push hook only. It never starts a coding CLI or
-runs tests. Run `pushpilot playwright-init --yes` separately to set up Playwright.
-
-## The push experience
-
-1. Run `git push` normally. PushPilot asks whether to generate coverage.
-2. **No / Enter / timeout:** generation is not run; normal Git and other hooks continue.
-3. **Yes:** the main coding CLI evaluates coverage needs and reads existing tests.
-   It shows a plan and waits for your explicit approval before editing coverage.
-4. It adds or patches tests/helpers, then loops on `pushpilot verify --job <id>` inside its
-   own session. `verify` runs **only** the specs it added or edited (plus existing specs that
-   import a helper it added or edited), never the whole suite. On failure the agent reads the
-   report/traces, fixes the tests and reruns, for as long as it takes. There is no time limit.
-5. The first passing `verify` run closes the coding session. PushPilot does **not** rerun tests
-   afterwards: it only checks the files are byte-identical to the verified run. Exit zero without
-   a positive passed-test count, or any skipped/failed/flaky test, never counts as passing.
-6. PushPilot commits exactly the verified test files (refusing dirty starting trees, unrelated
-   edits, deleted files, or changes to HEAD/index).
-7. After the original `git push` exits (whether it succeeded or not), PushPilot pushes the
-   exact generated commit as a fast-forward and sends a desktop notification saying all is done. Other pre-push policies
-   still run. Publishing failures leave tests committed locally and report recovery instructions.
-
-A coverage-not-needed decision includes a reason and must leave the repository unchanged.
-Failures after accepting generation block the push and preserve files for review. Ctrl-C
-cancels. `generation.timeoutSeconds` and `playwright.testTimeoutSeconds` default to `null`
-(no limit); set them only if you want a hard cap. Inspect `pushpilot logs` for blockers. Do not
-accept a plan that hides failures with skipped tests or requires production access.
-
-## Commands and flags
-
-| Command | Purpose / options |
+| Command | What it does |
 | --- | --- |
-| `init` | Configure provider and the pre-push hook only. Never starts a coding CLI or runs tests. `--no-hook` skips hook installation; `--force` allows insertion into a managed hook after backup (does not overwrite config). |
-| `playwright-init` | Show setup guidance. `--yes` opens the main coding CLI to set up Playwright; PushPilot does not run tests afterwards. |
-| `generate` | Generate coverage without initiating a push. `--base REV`, `--head REV` (default HEAD), `--provider copilot\|claude`, `--force` retry duplicate changes. `--foreground` is retained for compatibility; all generation is foreground. |
-| `verify --job ID` | Run only the job's new/edited specs. Used by the coding CLI's fix loop; a passing run ends its session. |
-| `push` | Alias for normal `git push`; all arguments pass to Git and the installed hook handles coverage. |
-| `status [JOB]` | Recent jobs or one job; `--json`, `--limit N` (default 10). |
-| `logs [JOB]` | Latest or selected job log; `--tail N` (default 200). |
-| `provider [ID]` | Pick the AI provider from a list (arrow keys + Enter). With `ID`, only a listed provider is accepted. |
-| `providers` | Provider availability; `--json`. |
-| `config show` | Effective settings. |
-| `config get KEY` | Read a dotted setting. |
-| `config set KEY VALUE` | Set a JSON value or string. |
-| `config validate` / `config path` | Validate settings / show config location. |
-| `uninstall` | Remove only the PushPilot hook block; retain config, tests and job state. |
-| `help [COMMAND]` / `COMMAND --help` | Command-specific help. |
-| `--version`, `-v` | Show version. |
+| `pushpilot init` | Set up PushPilot in this repo: choose your AI assistant and add the push hook. |
+| `pushpilot playwright-init --yes` | Have the AI install and set up Playwright for your project. |
+| `pushpilot generate` | Generate tests for your latest changes without pushing. |
+| `pushpilot provider` | Switch between Copilot and Claude. |
+| `pushpilot status` | List recent test-generation runs. |
+| `pushpilot logs` | Show the log of the last run. Use this when something fails. |
+| `pushpilot config show` | Show your current settings. |
+| `pushpilot uninstall` | Remove the push hook. Your tests and settings stay. |
+| `pushpilot help <command>` | Show help for one command. |
 
-Switch providers or configure Python:
+## Common settings
+
+Settings live in `.ai-e2e.json` in your repo.
 
 ```sh
-pushpilot provider            # pick copilot or claude from a list (↑/↓, Enter)
-pushpilot config set playwright.testDir tests/e2e
-pushpilot config set playwright.testCommand '[".venv/bin/python","-m","pytest"]'
-pushpilot config set generation.commitGeneratedTests false
-pushpilot config set generation.timeoutSeconds 7200   # optional hard cap; default is none
+pushpilot config set playwright.testDir tests/e2e           # where your tests live
+pushpilot config set generation.commitGeneratedTests false  # don't auto-commit tests
+pushpilot config set generation.timeoutSeconds 3600         # stop after 1 hour (default: no limit)
 ```
 
-On Windows use `.venv/Scripts/python.exe` in the JSON array. Configure argv, not a shell
-pipeline. Custom runners must print a normal Playwright/pytest summary (for example
-`3 passed`) and fail on test failures. Do not use quiet/custom reporters that suppress
-the summary. Setup and generation need browsers, a reachable local application, and
-any approved environment prerequisites.
+**Python projects** (pytest-playwright): point PushPilot at your virtualenv.
 
-## Compatibility and privacy
+```sh
+pushpilot config set playwright.testCommand '[".venv/bin/python","-m","pytest"]'
+# On Windows, use .venv/Scripts/python.exe
+```
 
-The old `ai-e2e` executable remains an alias. `.ai-e2e.json`, `.ai-e2e/` job state,
-existing hook markers and `AI-E2E-Job` trailers intentionally remain unchanged.
-Existing `allowModifyExistingTests: false` is respected; set it to `true` to enable patches.
-`playwright.runGeneratedTests` remains readable for old configs but verification is now
-mandatory. Legacy MCP settings are accepted but no MCP or subagents are launched.
+PushPilot supports JavaScript/TypeScript (Playwright Test) and Python (pytest-playwright).
 
-`AI_E2E_ASSUME=yes|no` controls only the initial hook question, not plan/commit approval.
-The legacy `AI_E2E_SKIP=1` hook escape hatch remains compatible but is not used by the
-normal or follow-up workflow. Prefer answering no when you do not want generation.
-Do not use automated approval in untrusted repositories.
+## Privacy
 
-Outgoing diffs and related tests go to your selected AI provider after you accept.
-Known sensitive paths are excluded and logs are redacted, but this is not a security
-sandbox: the coding CLI has repository/shell access and its own permissions apply.
-Review prompts, tests, and changes before approving. Runtime state contains task context
-and should remain ignored by Git.
+Your code changes go to your chosen AI provider **only after you say yes**.
+PushPilot leaves out known secret files and redacts its logs. The AI assistant runs with its
+own permissions in your repo, so review the plan before you approve it.
 
-Maintainer details: [architecture and safety](docs/architecture.md),
-[distribution and versioning](docs/releasing.md).
+## More
+
+- [How it works inside](docs/architecture.md)
+- [Releasing](docs/releasing.md)
+- Report a problem: [GitHub Issues](https://github.com/Raj-Pratik/e2e-ai/issues)
