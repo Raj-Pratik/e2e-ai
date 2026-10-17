@@ -1,22 +1,66 @@
-name: Release validation and bundles
+name: Release
+# Every push to main publishes a GitHub Release (tag v<version>) with release notes,
+# then updates the Homebrew formula (Formula/) and Scoop manifest (bucket/) in this repo.
+# Commits pushed by this workflow use GITHUB_TOKEN, so they do not trigger it again.
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  NODE_VERSION: '22.20.0'
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Pick release version (bump minor if this version is already released)
+        id: version
+        run: |
+          git fetch --tags --force
+          version="$(node -p "require('./package.json').version")"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already released; bumping minor (see AGENTS.md)."
+            npm version minor --no-git-tag-version
+            version="$(node -p "require('./package.json').version")"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -am "chore(release): v$version"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+          npm run release:check
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   bundle:
+    needs: prepare
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.20.0'
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
       - run: npm run release:check
@@ -28,14 +72,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          curl --fail --location https://raw.githubusercontent.com/nodejs/node/v22.20.0/LICENSE -o release/NODE-LICENSE
+          curl --fail --location "https://raw.githubusercontent.com/nodejs/node/v$NODE_VERSION/LICENSE" -o release/NODE-LICENSE
           NODE_LICENSE=release/NODE-LICENSE npm run release:bundle
       - name: Smoke-test packaged entry point
         if: runner.os != 'Windows'
         shell: bash
         run: |
           bundle="$(find release -maxdepth 1 -type d -name 'pushpilot-*' | head -1)"
-          "$bundle/pushpilot" --version
+          test "$("$bundle/pushpilot" --version)" = "${{ needs.prepare.outputs.version }}"
       - name: Smoke-test Windows launcher
         if: runner.os == 'Windows'
         shell: pwsh
@@ -51,3 +95,79 @@ jobs:
             release/*.zip
             release/*.sha256
           if-no-files-found: error
+
+  publish:
+    needs: [prepare, bundle]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: pushpilot-*
+          merge-multiple: true
+      - name: Write release notes from commits since the previous tag
+        run: |
+          git fetch --tags --force
+          previous="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "$previous" ]; then
+              git log "$previous..$SHA" --no-merges --pretty='format:- %s (%h)' | grep -v 'chore(release)' || echo '- Maintenance release'
+            else
+              echo '- First public release'
+            fi
+            echo
+            echo "## Install or update"
+            echo
+            echo '```sh'
+            echo '# macOS / Linux'
+            echo 'brew tap raj-pratik/pushpilot https://github.com/Raj-Pratik/e2e-ai'
+            echo 'brew install pushpilot     # update: brew upgrade pushpilot'
+            echo '```'
+            echo
+            echo '```powershell'
+            echo '# Windows'
+            echo 'scoop bucket add pushpilot https://github.com/Raj-Pratik/e2e-ai'
+            echo 'scoop install pushpilot    # update: scoop update pushpilot'
+            echo '```'
+            if [ -n "$previous" ]; then
+              echo
+              echo "**Full changelog:** https://github.com/${{ github.repository }}/compare/$previous...v$VERSION"
+            fi
+          } > release/NOTES.md
+          cat release/NOTES.md
+      - name: Create tag and GitHub Release
+        run: |
+          gh release create "v$VERSION" --target "$SHA" --title "PushPilot v$VERSION" \
+            --notes-file release/NOTES.md release/*.tar.gz release/*.zip release/*.sha256
+      - name: Publish Homebrew formula and Scoop manifest
+        run: |
+          npm run release:manifests -- release release/manifests
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p Formula bucket
+          cp release/manifests/Formula/pushpilot.rb Formula/pushpilot.rb
+          cp release/manifests/bucket/pushpilot.json bucket/pushpilot.json
+          git add Formula/pushpilot.rb bucket/pushpilot.json
+          git commit -m "chore(release): publish v$VERSION to Homebrew and Scoop"
+          for attempt in 1 2 3; do
+            git push origin main && exit 0
+            git pull --rebase origin main
+          done
+          exit 1
