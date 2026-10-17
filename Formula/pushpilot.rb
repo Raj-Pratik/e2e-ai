@@ -2,9 +2,9 @@
 class Pushpilot < Formula
   desc "Approved Playwright coverage for outgoing Git changes"
   homepage "https://github.com/Raj-Pratik/e2e-ai"
-  url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.6.0/pushpilot-1.6.0.tar.gz"
-  sha256 "c041156be4f3f1ac0e9aef06bc6098ecf8945a977f06678bc8fdd053895f5914"
-  version "1.6.0"
+  url "https://github.com/Raj-Pratik/e2e-ai/releases/download/v1.7.0/pushpilot-1.7.0.tar.gz"
+  sha256 "7cd29d3e11156ceaa21f3afd4120573ed45f5f8ec5ef10b1177c8e01bcb6bd5a"
+  version "1.7.0"
   license "MIT"
 
   depends_on "node"
