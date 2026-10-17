@@ -35,6 +35,25 @@ export interface RunResult {
 const DEFAULT_MAX_OUTPUT = 10 * 1024 * 1024;
 const KILL_GRACE_MS = 5000;
 
+/**
+ * Path of the user's terminal for an interactive child. On POSIX this resolves `/dev/tty` to the
+ * real device (e.g. `/dev/ttys003`): Bun-based CLIs such as Claude Code cannot watch a `/dev/tty`
+ * descriptor on macOS (kqueue returns EINVAL) and crash at startup.
+ */
+export function interactiveTerminalPath(): string {
+  if (process.platform === 'win32') return 'CONIN$';
+  // `tty` with a /dev/tty descriptor just echoes "/dev/tty" on macOS; ps reports the real device.
+  const name = spawnSync('ps', ['-o', 'tty=', '-p', String(process.pid)], { encoding: 'utf8' }).stdout?.trim();
+  if (!name || !/^[\w/]+$/.test(name) || name.startsWith('?')) return '/dev/tty';
+  const device = `/dev/${name}`;
+  try {
+    fs.closeSync(fs.openSync(device, 'r'));
+    return device;
+  } catch {
+    return '/dev/tty';
+  }
+}
+
 export function hasInteractiveTerminal(): boolean {
   try {
     const fd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
@@ -159,8 +178,9 @@ export function runProcess(command: string, args: readonly string[], options: Ru
 
     try {
       if (options.interactive) {
-        interactiveFd = fs.openSync(process.platform === 'win32' ? 'CONIN$' : '/dev/tty', 'r');
-        interactiveOutputFd = fs.openSync(process.platform === 'win32' ? 'CONOUT$' : '/dev/tty', 'w');
+        const terminal = interactiveTerminalPath();
+        interactiveFd = fs.openSync(terminal, 'r');
+        interactiveOutputFd = fs.openSync(process.platform === 'win32' ? 'CONOUT$' : terminal, 'w');
       }
       child = spawn(command, [...args], {
         cwd: options.cwd,

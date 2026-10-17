@@ -1,6 +1,6 @@
 {
   "name": "pushpilot",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "AI-assisted Playwright E2E test generation for outgoing Git changes.",
   "type": "module",
   "license": "MIT",

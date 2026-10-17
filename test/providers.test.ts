@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { defaultProviderSettings } from '../src/config.js';
-import { runProcess } from '../src/proc.js';
+import { interactiveTerminalPath, runProcess } from '../src/proc.js';
 import { assertSafeExtraArgs, detectProvider, getProvider, listProviders, secretEnvNames } from '../src/providers/index.js';
 import type { ProviderRequest } from '../src/providers/index.js';
 import { FAKE_PROVIDER, tmpDir } from './helpers.js';
@@ -109,6 +109,12 @@ describe('claude invocation', () => {
 });
 
 describe('process execution', () => {
+  it('hands interactive children a real terminal device, never the /dev/tty alias when one is known', () => {
+    const terminal = interactiveTerminalPath();
+    if (process.platform === 'win32') assert.equal(terminal, 'CONIN$');
+    else assert.ok(terminal === '/dev/tty' || /^\/dev\/(pts\/\d+|tty\w+)$/.test(terminal), terminal);
+  });
+
   it('kills processes that exceed the timeout', async () => {
     const result = await runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: tmpDir(), timeoutMs: 200, killProcessGroup: true });
     assert.equal(result.timedOut, true);
